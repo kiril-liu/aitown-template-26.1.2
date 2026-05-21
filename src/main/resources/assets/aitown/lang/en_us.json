@@ -1,0 +1,13 @@
+{
+  "itemGroup.aitown": "Example Mod Tab",
+  "block.aitown.example_block": "Example Block",
+  "item.aitown.example_item": "Example Item",
+
+  "aitown.configuration.title": "aitown Configs",
+  "aitown.configuration.section.aitown.common.toml": "aitown Configs",
+  "aitown.configuration.section.aitown.common.toml.title": "aitown Configs",
+  "aitown.configuration.items": "Item List",
+  "aitown.configuration.logDirtBlock": "Log Dirt Block",
+  "aitown.configuration.magicNumberIntroduction": "Magic Number Text",
+  "aitown.configuration.magicNumber": "Magic Number"
+}
