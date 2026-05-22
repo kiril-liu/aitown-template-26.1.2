@@ -1,51 +1,127 @@
-# AI Town - 智能建筑工 Mod (Smart Builder Villagers)
+# AI Town - 智能村民 Mod (Smart Villagers)
 
-[![Minecraft Version](https://img.shields.io/badge/Minecraft-1.21.2+-brightgreen.svg)](https://minecraft.net/)
-[![NeoForge](https://img.shields.io/badge/NeoForge-26.1.2-orange.svg)](https://neoforged.net/)
-[![Version](https://img.shields.io/badge/Version-v0.1.0--alpha-blue.svg)]()
+# Changelog
 
-这是一个致力于让《我的世界》村民变得“真正聪明”的 NeoForge 模组。
+All notable changes to this project will be documented in this file.
 
-通过本模组，玩家可以使用**“建筑芯片”**将普通村民升级为**“智能建筑工”**。他们不仅能自动拾取建材，还能读取 NBT 蓝图结构，在一砖一瓦间全自动盖起原版村庄的房屋。最核心的特色是引入了**“工地蓝牙建材箱”**机制，极大地降低了玩家投喂建材的繁琐度。
+## [v0.2.0-alpha] - 2026-05-22
 
-## ✨ 核心功能 (v0.1.0-alpha)
+### Overview
 
-* **⚡ 芯片植入与状态控制**
-  * 使用自定义物品“建筑芯片”，**直接右键**即可将普通村民升级并激活为“智能建筑工”。
-  * **Shift + 右键** 建筑工，可重新派发盲盒图纸并重置施工坐标。
-  * **直接右键** 建筑工，可随时安全查看其 8 格隐藏背包内的物资。
-  * 村民头顶的名字会动态显示其当前状态（如：`[施工中] 智能建筑工` 或 `[闲置] 智能建筑工`）。
+`v0.2.0-alpha` is the second early alpha version of **AI Town**.
 
-* **🏗️ NBT 蓝图全自动解析**
-  * 利用 Java 反射（Reflection）机制突破底层限制，直接读取结构文件。
-  * 当前内置 4 套原版平原村庄（Plains House）的随机盲盒图纸。
-  * 完美保留蓝图中楼梯朝向、原木摆放、门等复杂的方块状态（BlockState）。
-  * 自动过滤并忽略图纸中的 `空气 (Air)`、`结构空位 (Structure Void)` 以及导致寻路卡死的 `结构方块 (Structure Block)`。
+This version expands the project from a single smart builder villager into an early multi-role intelligent villager system. Smart villagers can now build houses, collect materials, chop trees, store resources, craft basic building components, and expose their internal inventory through an in-game UI.
 
-* **📦 “蓝牙建材箱”系统**
-  * 智能建筑工首先会消耗自己 8 格隐藏背包中拾取到的散落建材。
-  * 当自身材料不足时，会自动扫描以工地为中心 **10 格范围内** 的所有容器（箱子、木桶等）。
-  * **隔空取物：** 自动扣除箱子里的材料并在世界中进行放置，彻底解决原版寻路拥堵与 AI 卡死问题。
+This release marks the beginning of the broader **AI Town** direction: villagers are no longer only passive NPCs or instant-structure generators. They are starting to behave like workers with roles, inventories, tasks, storage logic, and visible states.
 
-* **💬 拟真 AI 交互反馈**
-  * **精准报菜名：** 当包里和附近箱子里都没有图纸需要的建材时，建筑工会立即停工，每隔 3 秒向玩家抱怨并**精确报出缺少的方块名称**（如：*“没材料了！我目前急需：橡木台阶”*），防止服务端性能黑洞。
-  * 包含原版村民的语音联动（成功升级、缺材料摇头哼哼、竣工发声）。
+---
 
-## 🎮 游玩指南 (How to Play)
+### Added
 
-1. 在平坦的空地上放置 1~2 个大箱子，并在里面分类放入村庄常见的建材（橡木原木、橡木木板、玻璃片、橡木门、圆石等）。
-2. 在箱子附近召唤一个普通村民。
-3. 手持“建筑芯片”，**直接右键** 点击村民激活。
-4. 观察聊天框提示，村民会随机抽取一张图纸（如 `plains_small_house_1`），并立刻转身开始从箱子里抽取材料打灰。
-5. 如果村民罢工并摇头，请根据他在聊天框里喊出的“急需方块名称”，将对应材料补充进箱子。
-6. 房屋竣工后，村民状态变为 `[闲置]`。将其推至新空地，使用 **Shift + 右键** 即可强制注入新芯片，抽选新盲盒盖下一栋楼！
+#### Smart Builder Villager
 
-## 🛠️ 下一步开发计划 (TODO for v0.2.0+)
+- Added the **Villager Chip**, which can turn a normal villager into a smart builder.
+- Smart builders can read structure blueprints and place blocks step by step.
+- Smart builders can consume materials from:
+  - their own hidden villager inventory;
+  - nearby storage containers;
+  - the temporary "Bluetooth Building Material Chest" system.
+- Builders can continue construction based on available materials.
+- Builders can report missing materials.
+- Builders can be reactivated using chip interaction.
 
-- [ ] 开放自定义图纸接口，允许玩家读取 `src/main/resources/data/aitown/structure/` 下的自定义房屋。
-- [ ] 优化 3D 寻路算法，探索大型多层建筑的高空方块放置解决方案。
-- [ ] 引入“图纸工作台”与可视化 UI 界面，告别盲盒，支持定向选房。
-- [ ] 添加伐木工、矿工等周边生态链，实现真正的自动化村庄。
+#### Blueprint / Structure Building
+
+- Added support for loading Minecraft structure templates.
+- Added support for custom `.nbt` structure files.
+- Added support for vanilla structure templates such as village houses.
+- Added logic to ignore invalid or special blocks such as structure blocks inside templates.
+- Added initial reflection-based support for reading structure template palettes in the current NeoForge environment.
+
+#### Bluetooth Building Material Chest
+
+- Added nearby container scanning for construction materials.
+- Smart builders can consume materials from nearby chests instead of relying only on their personal inventory.
+- This allows the player to place a material chest near the construction site and let the builder use it automatically.
+
+#### Portable Crafting / Mental Crafting
+
+- Added basic automatic crafting support for builders.
+- Builders can convert simple raw materials into required building components when possible.
+- Supported examples include:
+  - logs to planks;
+  - planks to stairs;
+  - planks to slabs;
+  - planks to doors;
+  - planks to fences;
+  - cobblestone to cobblestone stairs/slabs/walls;
+  - stone to stone bricks;
+  - glass to glass panes.
+- Added safety checks for missing crafting ingredients to avoid runtime crashes.
+
+#### Smart Lumberjack Villager
+
+- Added the **Lumberjack Chip**, which can turn a normal villager into a smart lumberjack.
+- Smart lumberjacks can:
+  - search for nearby trees;
+  - identify logs using Minecraft log tags;
+  - validate nearby leaves to reduce accidental chopping of player buildings;
+  - chop logs;
+  - collect dropped logs, saplings, sticks, and apples;
+  - return resources to nearby home storage.
+- Added basic idle behavior for lumberjacks.
+- Lumberjacks can enter idle state when:
+  - no valid trees are found;
+  - inventory is full;
+  - no valid storage is available;
+  - storage is full.
+
+#### Villager Inventory UI
+
+- Added right-click inventory viewing for smart villagers.
+- Players can now inspect the internal inventory of intelligent villagers.
+- This makes debugging and managing multiple smart villagers much easier.
+- Shift + right-click remains reserved for chip activation and role assignment.
+- Normal right-click on a smart villager opens the inventory UI.
+
+#### Role Interaction Improvements
+
+- Improved chip behavior for existing smart villagers.
+- Added support for repeated activation through chip interaction.
+- Improved role state handling between builder and lumberjack logic.
+- Added clearer separation between:
+  - normal right-click inspection;
+  - Shift + right-click activation.
+ 
+---
+### Known Issues
+
+- Villager pathfinding is still mostly based on Minecraft's default navigation and needs further abstraction.
+- Builders may still struggle with vertical construction or unreachable positions.
+- Lumberjacks may still require improved pickup and deposit behavior.
+- Storage binding is not yet explicit; villagers currently search nearby containers.
+- Smart villager status display is still basic.
+- Personal names, work logs, door signs, mood, hunger, sleep, and trade systems are planned but not yet implemented.
+- The current system is still an early alpha and may produce unexpected emergent behavior.
+
+---
+
+### Next Plans
+
+The next development stage will focus on the **Smart Villager Identity and Behavior Core**.
+
+Planned features include:
+
+- unique names for each smart villager;
+- citizen IDs;
+- unified villager role/status data;
+- slower and more natural thinking frequency;
+- clearer behavior priority system;
+- better pathfinding wrapper;
+- better home and storage binding;
+- work logs;
+- detailed right-click status display;
+- foundation for future town simulation systems.
 
 ---
 *Created by [刘家祥] - Let's build a smarter world!*
