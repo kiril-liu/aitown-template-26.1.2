@@ -1,5 +1,6 @@
 package com.aitown.aitownmod;
 
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
@@ -133,6 +134,111 @@ public class VillagerPickupHandler {
                                                     }
                                                 }
                                             }
+                                        }
+                                    }
+                                }
+
+                                // ==========================================
+                                // C. 【新增】随身工作台：没找到材料？尝试在大脑里合成！
+                                // ==========================================
+                                if (!hasMaterial) {
+                                    String reqName = BuiltInRegistries.ITEM.getKey(requiredItem).getPath();
+                                    String ingredientName = null;
+                                    int yieldCount = 1; // 默认合成产出 1 个
+
+                                    // 【合成法则表】你可以随时在这里添加新的转换规则！
+                                    if (reqName.endsWith("_planks")) {
+                                        ingredientName = reqName.replace("_planks", "_log"); // 木板 -> 找原木
+                                        yieldCount = 4;
+                                    } else if (reqName.endsWith("_stairs")) {
+                                        ingredientName = reqName.replace("_stairs", "_planks"); // 楼梯 -> 找木板
+                                    } else if (reqName.endsWith("_slab")) {
+                                        ingredientName = reqName.replace("_slab", "_planks"); // 半砖 -> 找木板
+                                        yieldCount = 2;
+                                    } else if (reqName.endsWith("_door")) {
+                                        ingredientName = reqName.replace("_door", "_planks"); // 门 -> 找木板
+                                    } else if (reqName.endsWith("_fence")) {
+                                        ingredientName = reqName.replace("_fence", "_planks"); // 栅栏 -> 找木板
+                                    } else if (reqName.equals("cobblestone_stairs") || reqName.equals("cobblestone_slab") || reqName.equals("cobblestone_wall")) {
+                                        ingredientName = "cobblestone"; // 各种圆石建材 -> 找圆石
+                                        yieldCount = reqName.endsWith("_slab") ? 2 : 1;
+                                    } else if (reqName.equals("stone_bricks")) {
+                                        ingredientName = "stone"; // 石砖 -> 找石头
+                                    } else if (reqName.equals("glass_pane")) {
+                                        ingredientName = "glass"; // 玻璃板 -> 找玻璃
+                                        yieldCount = 2;
+                                    }
+
+                                    // 如果触发了合成法则，就去寻找“原料”
+                                    if (ingredientName != null) {
+                                        //net.minecraft.world.item.Item ingredientItem = BuiltInRegistries.ITEM.get(net.minecraft.resources.Identifier.parse("minecraft:" + ingredientName)).get().value();
+                                        // 【核心修复】安全拆盲盒！先拿到盒子，不直接撕开
+                                        java.util.Optional<net.minecraft.core.Holder.Reference<net.minecraft.world.item.Item>> optItem =
+                                                BuiltInRegistries.ITEM.get(net.minecraft.resources.Identifier.parse("minecraft:" + ingredientName));
+
+                                        // 晃一晃盒子，如果盒子是空的（比如想要找“石头木板”这种不存在的东西），就直接结束本次思考，向玩家报错！
+                                        if (optItem.isEmpty()) {
+                                            missingMaterials = true;
+                                            missingBlockName = requiredState.getBlock().getName().getString() + " (无法自动合成，请直接提供成品)";
+                                            break;
+                                        }
+
+                                        // 如果盒子里有东西，安全取出！
+                                        net.minecraft.world.item.Item ingredientItem = optItem.get().value();
+
+                                        boolean hasIngredient = false;
+                                        net.minecraft.world.Container ingContainer = null;
+                                        int ingSlot = -1;
+
+                                        // 先找自己背包有没有原料
+                                        for (int i = 0; i < inventory.getContainerSize(); i++) {
+                                            if (!inventory.getItem(i).isEmpty() && inventory.getItem(i).getItem() == ingredientItem) {
+                                                hasIngredient = true;
+                                                ingContainer = inventory;
+                                                ingSlot = i;
+                                                break;
+                                            }
+                                        }
+
+                                        // 如果自己包里没有，扫描周围蓝牙箱子里的原料
+                                        if (!hasIngredient) {
+                                            int radius = 10;
+                                            net.minecraft.core.BlockPos.MutableBlockPos mutablePos = new net.minecraft.core.BlockPos.MutableBlockPos();
+                                            searchIng:
+                                            for (int dx = -radius; dx <= radius; dx++) {
+                                                for (int dy = -4; dy <= 4; dy++) {
+                                                    for (int dz = -radius; dz <= radius; dz++) {
+                                                        mutablePos.set(center.getX() + dx, center.getY() + dy, center.getZ() + dz);
+                                                        net.minecraft.world.level.block.entity.BlockEntity be = serverLevel.getBlockEntity(mutablePos);
+                                                        if (be instanceof net.minecraft.world.Container chest) {
+                                                            for (int i = 0; i < chest.getContainerSize(); i++) {
+                                                                if (!chest.getItem(i).isEmpty() && chest.getItem(i).getItem() == ingredientItem) {
+                                                                    hasIngredient = true;
+                                                                    ingContainer = chest;
+                                                                    ingSlot = i;
+                                                                    break searchIng;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // 【开始脑内合成！】如果找到了原料
+                                        if (hasIngredient) {
+                                            // 扣除 1 个原料
+                                            ingContainer.removeItem(ingSlot, 1);
+                                            ingContainer.setChanged();
+
+                                            // 凭空把合成出来的成品（如 4个木板）塞进村民的背包里！
+                                            inventory.addItem(new ItemStack(requiredItem, yieldCount));
+
+                                            // 播放一个类似“做手工”的音效
+                                            villager.level().playSound(null, villager.blockPosition(), net.minecraft.sounds.SoundEvents.VILLAGER_WORK_MASON, net.minecraft.sounds.SoundSource.NEUTRAL, 1.0F, 1.0F);
+
+                                            // 【极其关键】这 0.5 秒用来做手工了，告诉大脑：等下一个 0.5 秒再去放置！
+                                            return;
                                         }
                                     }
                                 }

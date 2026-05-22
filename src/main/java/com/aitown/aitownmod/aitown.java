@@ -46,6 +46,13 @@ public class aitown {
             "villager_chip",
             properties -> new VillagerChipItem(properties.stacksTo(64))
     );
+
+    // 注册“伐木工芯片” (lumberjack_chip)
+    public static final DeferredItem<LumberjackChipItem> LUMBERJACK_CHIP = ITEMS.registerItem(
+            "lumberjack_chip",
+            properties -> new LumberjackChipItem(properties.stacksTo(64))
+    );
+
     // =========================================================
     // 【核心修改 2】注册我们自己的创造模式选项卡，并把芯片放进去
     // =========================================================
@@ -55,6 +62,7 @@ public class aitown {
             .icon(() -> VILLAGER_CHIP.get().getDefaultInstance()) // 选项卡的图标就用我们的建筑芯片！
             .displayItems((parameters, output) -> {
                 output.accept(VILLAGER_CHIP.get());            // 把芯片加进这个选项卡里
+                output.accept(LUMBERJACK_CHIP.get());  // 【新增】把伐木芯片也放进选项卡
             }).build());
 
     // 构造函数：Mod 加载时最先运行的代码
@@ -64,6 +72,9 @@ public class aitown {
         // 将我们的物品和选项卡注册器绑定到模组事件总线
         ITEMS.register(modEventBus);
         CREATIVE_MODE_TABS.register(modEventBus);
+
+        // 【新增这一行】注册我们的专属背包 UI！
+        //ModMenus.MENUS.register(modEventBus);
 
         NeoForge.EVENT_BUS.register(this);
 
