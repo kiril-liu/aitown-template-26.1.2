@@ -13,7 +13,7 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 
 @EventBusSubscriber(modid = aitown.MODID)
-public class VillagerInventoryInteractHandler {
+public class InventoryInteractHandler {
 
     @SubscribeEvent
     public static void onEntityInteract(PlayerInteractEvent.EntityInteract event) {
@@ -39,6 +39,26 @@ public class VillagerInventoryInteractHandler {
         if (serverPlayer.isShiftKeyDown()) {
             return;
         }
+
+        serverPlayer.sendSystemMessage(Component.literal("§6===== 智能村民状态 ====="));
+        serverPlayer.sendSystemMessage(Component.literal(
+                "§e姓名：§f" + SmartVillagerData.getCitizenName(villager)
+                        + " §8(" + SmartVillagerData.getCitizenId(villager) + ")"
+        ));
+        serverPlayer.sendSystemMessage(Component.literal(
+                "§e职业：§f" + SmartVillagerData.getRole(villager)
+        ));
+        serverPlayer.sendSystemMessage(Component.literal(
+                "§e状态：§f" + SmartVillagerData.getStatus(villager)
+        ));
+        serverPlayer.sendSystemMessage(Component.literal(
+                "§e背包：§f" + SmartVillagerData.usedSlots(villager)
+                        + "/" + villager.getInventory().getContainerSize()
+                        + " 格，合计 " + SmartVillagerData.totalItems(villager) + " 个物品"
+        ));
+        serverPlayer.sendSystemMessage(Component.literal(
+                "§e工作点/大本营：§f" + SmartVillagerData.getHomeText(villager)
+        ));
 
         SimpleContainer villagerInv = villager.getInventory();
 
@@ -83,7 +103,7 @@ public class VillagerInventoryInteractHandler {
                                 displayContainer,
                                 1
                         ),
-                Component.literal("智能村民背包")
+                Component.literal(SmartVillagerData.getCitizenName(villager) + "的背包")
         ));
 
         event.setCancellationResult(InteractionResult.SUCCESS);

@@ -20,7 +20,6 @@ import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
-import org.slf4j.Logger;
 
 @Mod(aitown.MODID)
 public class aitown {
@@ -42,9 +41,9 @@ public class aitown {
     //public static final DeferredItem<Item> VILLAGER_CHIP = ITEMS.register("villager_chip",
     //        () -> new VillagerChipItem(new Item.Properties().stacksTo(64))); // 顺便设置最大堆叠为64
     // 改用 registerItem，它会把带好 ID 的 properties 传给我们
-    public static final DeferredItem<VillagerChipItem> VILLAGER_CHIP = ITEMS.registerItem(
+    public static final DeferredItem<BuilderChipItem> VILLAGER_CHIP = ITEMS.registerItem(
             "villager_chip",
-            properties -> new VillagerChipItem(properties.stacksTo(64))
+            properties -> new BuilderChipItem(properties.stacksTo(64))
     );
 
     // 注册“伐木工芯片” (lumberjack_chip)
@@ -73,8 +72,6 @@ public class aitown {
         ITEMS.register(modEventBus);
         CREATIVE_MODE_TABS.register(modEventBus);
 
-        // 【新增这一行】注册我们的专属背包 UI！
-        //ModMenus.MENUS.register(modEventBus);
 
         NeoForge.EVENT_BUS.register(this);
 
