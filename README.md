@@ -4,124 +4,116 @@
 
 All notable changes to this project will be documented in this file.
 
-## [v0.2.0-alpha] - 2026-05-22
+## 已实现功能
 
-### Overview
+### 1. 智能建筑工
 
-`v0.2.0-alpha` is the second early alpha version of **AI Town**.
+玩家可以通过建筑芯片将普通村民转化为智能建筑工。
 
-This version expands the project from a single smart builder villager into an early multi-role intelligent villager system. Smart villagers can now build houses, collect materials, chop trees, store resources, craft basic building components, and expose their internal inventory through an in-game UI.
+建筑工目前可以：
 
-This release marks the beginning of the broader **AI Town** direction: villagers are no longer only passive NPCs or instant-structure generators. They are starting to behave like workers with roles, inventories, tasks, storage logic, and visible states.
+- 读取结构蓝图；
+- 根据蓝图逐步建造房屋；
+- 使用自己背包中的材料；
+- 从附近箱子中获取建筑材料；
+- 使用橡木原木合成木质建筑材料；
+- 将非木质建筑材料转换为木质材料；
+- 建造基础木屋；
+- 显示当前状态；
+- 通过右键查看背包和状态信息。
+### 2. 智能伐木工
 
----
+玩家可以通过伐木芯片将普通村民转化为智能伐木工。
 
-### Added
+伐木工目前可以：
 
-#### Smart Builder Villager
+- 搜索附近树木；
+- 识别原木和树叶；
+- 砍伐树木；
+- 收集原木、树苗、苹果和木棍；
+- 将资源存入附近箱子；
+- 在没有工作时进入闲置状态；
+- 显示当前工作状态；
+- 通过右键查看背包和状态信息。
+### 3. 智能村民身份系统
 
-- Added the **Villager Chip**, which can turn a normal villager into a smart builder.
-- Smart builders can read structure blueprints and place blocks step by step.
-- Smart builders can consume materials from:
-  - their own hidden villager inventory;
-  - nearby storage containers;
-  - the temporary "Bluetooth Building Material Chest" system.
-- Builders can continue construction based on available materials.
-- Builders can report missing materials.
-- Builders can be reactivated using chip interaction.
+每个智能村民都会拥有自己的身份信息。
 
-#### Blueprint / Structure Building
+目前包括：
 
-- Added support for loading Minecraft structure templates.
-- Added support for custom `.nbt` structure files.
-- Added support for vanilla structure templates such as village houses.
-- Added logic to ignore invalid or special blocks such as structure blocks inside templates.
-- Added initial reflection-based support for reading structure template palettes in the current NeoForge environment.
+- 专属名字；
+- 职业；
+- 当前状态；
+- 背包信息；
+- 工作点 / 大本营信息。
+### 4. 智能村民背包查看
 
-#### Bluetooth Building Material Chest
+普通右键智能村民可以打开其内部背包界面。
 
-- Added nearby container scanning for construction materials.
-- Smart builders can consume materials from nearby chests instead of relying only on their personal inventory.
-- This allows the player to place a material chest near the construction site and let the builder use it automatically.
+目前用途：
 
-#### Portable Crafting / Mental Crafting
-
-- Added basic automatic crafting support for builders.
-- Builders can convert simple raw materials into required building components when possible.
-- Supported examples include:
-  - logs to planks;
-  - planks to stairs;
-  - planks to slabs;
-  - planks to doors;
-  - planks to fences;
-  - cobblestone to cobblestone stairs/slabs/walls;
-  - stone to stone bricks;
-  - glass to glass panes.
-- Added safety checks for missing crafting ingredients to avoid runtime crashes.
-
-#### Smart Lumberjack Villager
-
-- Added the **Lumberjack Chip**, which can turn a normal villager into a smart lumberjack.
-- Smart lumberjacks can:
-  - search for nearby trees;
-  - identify logs using Minecraft log tags;
-  - validate nearby leaves to reduce accidental chopping of player buildings;
-  - chop logs;
-  - collect dropped logs, saplings, sticks, and apples;
-  - return resources to nearby home storage.
-- Added basic idle behavior for lumberjacks.
-- Lumberjacks can enter idle state when:
-  - no valid trees are found;
-  - inventory is full;
-  - no valid storage is available;
-  - storage is full.
-
-#### Villager Inventory UI
-
-- Added right-click inventory viewing for smart villagers.
-- Players can now inspect the internal inventory of intelligent villagers.
-- This makes debugging and managing multiple smart villagers much easier.
-- Shift + right-click remains reserved for chip activation and role assignment.
-- Normal right-click on a smart villager opens the inventory UI.
-
-#### Role Interaction Improvements
-
-- Improved chip behavior for existing smart villagers.
-- Added support for repeated activation through chip interaction.
-- Improved role state handling between builder and lumberjack logic.
-- Added clearer separation between:
-  - normal right-click inspection;
-  - Shift + right-click activation.
- 
----
-### Known Issues
-
-- Villager pathfinding is still mostly based on Minecraft's default navigation and needs further abstraction.
-- Builders may still struggle with vertical construction or unreachable positions.
-- Lumberjacks may still require improved pickup and deposit behavior.
-- Storage binding is not yet explicit; villagers currently search nearby containers.
-- Smart villager status display is still basic.
-- Personal names, work logs, door signs, mood, hunger, sleep, and trade systems are planned but not yet implemented.
-- The current system is still an early alpha and may produce unexpected emergent behavior.
+- 查看建筑工携带的建筑材料；
+- 查看伐木工携带的原木、树苗、苹果等；
+- 调试村民当前是否因为背包满而停止工作；
+- 判断资源是否正确进入村民背包。
 
 ---
 
-### Next Plans
+### 5. 木屋材料体系
 
-The next development stage will focus on the **Smart Villager Identity and Behavior Core**.
+当前版本为了形成最小自治闭环，将建筑材料统一转换为木质体系。
 
-Planned features include:
+例如：
 
-- unique names for each smart villager;
-- citizen IDs;
-- unified villager role/status data;
-- slower and more natural thinking frequency;
-- clearer behavior priority system;
-- better pathfinding wrapper;
-- better home and storage binding;
-- work logs;
-- detailed right-click status display;
-- foundation for future town simulation systems.
+| 蓝图材料 | 当前处理 |
+|---|---|
+| 石头 / 圆石 / 石砖 | 转换为橡木木板 |
+| 玻璃 / 玻璃板 | 转换为木质窗格类替代物 |
+| 楼梯 | 转换为橡木楼梯 |
+| 半砖 | 转换为橡木半砖 |
+| 门 | 暂时转换为更稳定的木质入口方块 |
+| 火把 / 装饰物 | 当前阶段可能跳过 |
+
+这样做的目的是让当前版本可以只依赖一种核心资源
+## 下一步计划
+
+### v0.2.1 - 稳定工作锚点系统
+
+计划内容：
+
+- 建筑工完成任务后停留在房屋附近；
+- 伐木工闲置时停留在树旁、树苗旁或最后工作地点；
+- 箱子成为明确的中转目标；
+- 村民移动目标从“操作方块”改为“工作锚点”；
+- 清理多余的精细寻路和前摇逻辑；
+- 简化建筑工和伐木工代码。
+
+---
+
+### v0.2.2 - 小镇仓库系统
+
+计划内容：
+
+- 建立小镇公共仓库概念；
+- 伐木工将木材存入仓库；
+- 建筑工从仓库获取木材；
+- 村民不再频繁向玩家索要材料；
+- 右键状态中显示仓库位置；
+- 支持指定村民的工作地点和待命地点。
+
+---
+
+### v0.3.0 - 小镇中心
+
+计划内容：
+
+- 引入小镇中心概念；
+- 管理村民职业；
+- 管理村民当前状态；
+- 管理资源需求；
+- 管理建筑计划；
+- 管理仓库位置；
+- 为村民分配目标地点。
 
 ---
 *Created by [刘家祥] - Let's build a smarter world!*
