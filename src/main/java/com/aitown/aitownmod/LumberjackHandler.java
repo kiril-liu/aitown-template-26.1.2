@@ -91,7 +91,7 @@ public class LumberjackHandler {
 
                         boolean arrived = SmartVillagerData.moveToTargetPlace(
                                 villager,
-                                SmartVillagerData.REACH_HOME,
+                                SmartVillagerData.PLACE_CUT_TREE,
                                 SmartVillagerData.SPEED_NORMAL
                         );
 
@@ -192,7 +192,7 @@ public class LumberjackHandler {
                                 mPos.getZ() + 0.5D
                         );
 
-                        if (dist <= SmartVillagerData.REACH_CHOP) {
+                        if (dist <= SmartVillagerData.DISTANCE_CHOP) {
                             level.destroyBlock(mPos, true);
                             villager.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
                             didWork = true;
@@ -217,7 +217,7 @@ public class LumberjackHandler {
                                 mPos.getZ() + 0.5D
                         );
 
-                        if (dist <= SmartVillagerData.REACH_LEAF) {
+                        if (dist <= SmartVillagerData.DISTANCE_LEAF) {
                             level.destroyBlock(mPos, true);
                             didWork = true;
                         }
@@ -316,5 +316,152 @@ public class LumberjackHandler {
 
         return false;
     }
+    private static BlockPos getHomePos(Villager villager) {
+        int x = villager.getPersistentData().getInt("HomeX").orElse(villager.getBlockX());
+        int y = villager.getPersistentData().getInt("HomeY").orElse(villager.getBlockY());
+        int z = villager.getPersistentData().getInt("HomeZ").orElse(villager.getBlockZ());
+
+        return new BlockPos(x, y, z);
+    }
+    private static boolean tryPlantSapling(
+            net.minecraft.server.level.ServerLevel level,
+            Villager villager,
+            SimpleContainer inventory
+    ) {
+        ItemStack saplingStack = ItemStack.EMPTY;
+        int saplingSlot = -1;
+
+        // 1. 先从伐木工背包里找树苗
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
+
+            if (stack.isEmpty()) {
+                continue;
+            }
+
+            String itemName = net.minecraft.core.registries.BuiltInRegistries.ITEM
+                    .getKey(stack.getItem())
+                    .getPath();
+
+            if (itemName.contains("sapling")
+                    && stack.getItem() instanceof net.minecraft.world.item.BlockItem) {
+                saplingStack = stack;
+                saplingSlot = i;
+                break;
+            }
+        }
+
+        // 背包里没有树苗，就不处理种树
+        if (saplingStack.isEmpty() || saplingSlot < 0) {
+            return false;
+        }
+
+        // 2. 选择搜索中心：
+        // 如果有 targetPlace，就围绕当前工作地点找；
+        // 否则围绕村民当前位置找。
+        BlockPos center = SmartVillagerData.hasTargetPlace(villager)
+                ? SmartVillagerData.getTargetPlace(villager)
+                : villager.blockPosition();
+
+        BlockPos.MutableBlockPos plantPos = new BlockPos.MutableBlockPos();
+
+        // 3. 搜索附近适合种树的位置
+        // 半径可以稍微大一点，不要只在脚边找。
+        int searchRadius = 8;
+
+        for (int dx = -searchRadius; dx <= searchRadius; dx++) {
+            for (int dz = -searchRadius; dz <= searchRadius; dz++) {
+                for (int dy = -1; dy <= 2; dy++) {
+                    plantPos.set(
+                            center.getX() + dx,
+                            center.getY() + dy,
+                            center.getZ() + dz
+                    );
+
+                    BlockState ground = level.getBlockState(plantPos.below());
+                    BlockState space = level.getBlockState(plantPos);
+
+                    // 4. 地面必须适合种树
+                    boolean validGround =
+                            ground.is(net.minecraft.world.level.block.Blocks.GRASS_BLOCK)
+                                    || ground.is(net.minecraft.world.level.block.Blocks.DIRT)
+                                    || ground.is(net.minecraft.world.level.block.Blocks.COARSE_DIRT)
+                                    || ground.is(net.minecraft.world.level.block.Blocks.PODZOL);
+
+                    if (!validGround) {
+                        continue;
+                    }
+
+                    // 5. 树苗所在位置必须是空气
+                    if (!space.isAir()) {
+                        continue;
+                    }
+
+                    // 6. 不要在自己太近的位置种树，避免树长大后把伐木工卡住
+                    double distToVillager = villager.distanceToSqr(
+                            plantPos.getX() + 0.5D,
+                            plantPos.getY(),
+                            plantPos.getZ() + 0.5D
+                    );
+
+                    if (distToVillager < 16.0D) { // 4 格以内不种
+                        continue;
+                    }
+
+                    // 7. 附近已经有树苗或原木，就不要再种
+                    // 这样可以保证树之间大概隔开 5 格左右。
+                    if (hasNearbySaplingOrLog(level, plantPos, 5)) {
+                        continue;
+                    }
+
+                    // 8. 找到合适位置后，先把它设为目标点
+                    SmartVillagerData.setDisplayStatus(villager, "§2", "种树", "伐木工");
+                    SmartVillagerData.setTargetPlace(villager, plantPos.immutable(), "plant_sapling");
+
+                    boolean arrived = SmartVillagerData.moveToTargetPlace(
+                            villager,
+                            SmartVillagerData.PLACE_PLANT_TREE,
+                            SmartVillagerData.SPEED_NORMAL
+                    );
+
+                    // 还没走到种树位置，就先继续移动
+                    if (!arrived) {
+                        return true;
+                    }
+
+                    // 9. 已经靠近，开始种树
+                    net.minecraft.world.item.BlockItem saplingItem =
+                            (net.minecraft.world.item.BlockItem) saplingStack.getItem();
+
+                    level.setBlockAndUpdate(
+                            plantPos,
+                            saplingItem.getBlock().defaultBlockState()
+                    );
+
+                    saplingStack.shrink(1);
+                    inventory.setChanged();
+
+                    villager.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
+
+                    villager.level().playSound(
+                            null,
+                            plantPos,
+                            SoundEvents.GRASS_PLACE,
+                            SoundSource.NEUTRAL,
+                            1.0F,
+                            1.0F
+                    );
+
+                    SmartVillagerData.clearTargetPlace(villager);
+
+                    return true;
+                }
+            }
+        }
+
+        // 有树苗，但是附近没有找到合适位置
+        return false;
+    }
+
 
 }

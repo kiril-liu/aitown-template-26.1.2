@@ -26,37 +26,45 @@ public class SmartVillagerData {
     public static final String KEY_ROLE = "SmartRole";
     public static final String KEY_STATUS = "WorkerStatus";
 
+
     // ==========================================
-// AI Town 统一距离参数
-// 注意：这些值都是“距离平方”，不是普通距离。
-// 2.0D 约等于 1.4 格；4.0D 等于 2 格；64.0D 等于 8 格。
-// ==========================================
+    // 移动到目标点 / 工作锚点的距离
+    // 注意：这些都是“距离平方”
+    // ==========================================
+    // 精确站位：用于种树、捡物品这类需要比较靠近的位置。
+    // 4.0D = 2 格。
+    public static final double PLACE_CUT_TREE = 4.0D;
+    public static final double PLACE_PLANT_TREE = 4.0D;
 
-    // 精确站位：用于逃离点、临时安全点等，需要比较精确地走到某个格子附近。
-    public static final double REACH_EXACT_POS = 2.0D;
+    // 工作锚点：用于走到树旁边、房屋旁边。
+    // 9.0D = 3 格。
+    // 如果你觉得村民靠得太近，可以改成 16.0D，也就是 4 格。
+    public static final double PLACE_BUILD_HOUSE = 4.0D;
 
-    // 捡掉落物：需要比较靠近掉落物。
-    public static final double REACH_PICKUP = 4.0D;
+    // 仓库 / 大本营：走到箱子或大本营附近即可。
+    // 16.0D = 4 格。
+    public static final double PLACE_STORAGE = 4.0D;
 
-    // 回家 / 靠近大本营 / 靠近仓库：不需要站得特别精确。
-    public static final double REACH_HOME = 16.0D;
-
-    // 建筑施工：目标是“够得到目标方块”，不是站到目标方块上。
-    public static final double REACH_BUILD = 64.0D;
-
-    // 伐木：目标是靠近树干并砍伐。
-    public static final double REACH_CHOP = 36.0D;
-
-    // 清理树叶：树叶经常在上方，所以距离比伐木稍微宽一点。
-    public static final double REACH_LEAF = 49.0D;
-
-    // 应急建造：当寻路/站位失败时使用，允许稍远距离兜底放置。
-    public static final double REACH_EMERGENCY_BUILD = 100.0D;
-
-    // 移动速度参数
+    // 捡掉落物：2 格内算可以捡。
+    public static final double PLACE_PICKUP = 4.0D;
+    // ==========================================
+    // 职业操作距离 / 手臂长度
+    // 这些不是移动到达距离，而是站在工作点后能操作多远。
+    // ==========================================
+    // 建筑工手臂长度：15 格。
+    // 225.0D = 15 * 15。
+    public static final double DISTANCE_BUILD = 144.0D;
+    // 伐木工砍树手臂长度：15 格。
+    public static final double DISTANCE_CHOP = 144.0D;
+    // 伐木工清树叶手臂长度：15 格。
+    public static final double DISTANCE_LEAF = 144.0D;
+    // ==========================================
+    // 移动速度
+    // ==========================================
     public static final double SPEED_WORK = 0.6D;
     public static final double SPEED_NORMAL = 0.55D;
     public static final double SPEED_SLOW = 0.5D;
+
 
     private static final String[] NAMES = new String[] {
             "阿木", "石头", "松果", "米粒", "橡子", "青砖", "河灯", "小麦",
@@ -309,41 +317,6 @@ public class SmartVillagerData {
         }
     }
 
-    public static void keepMovingToTargetPlace(
-            Villager villager,
-            double reachSqr,
-            double speed
-    ) {
-        if (!hasTargetPlace(villager)) {
-            return;
-        }
-
-        suppressVanillaMovement(villager);
-
-        net.minecraft.core.BlockPos target = getTargetPlace(villager);
-
-        lookAtTargetPlace(villager);
-
-        double distance = villager.distanceToSqr(
-                target.getX() + 0.5D,
-                target.getY() + 0.5D,
-                target.getZ() + 0.5D
-        );
-
-        // 关键：已经进入工作距离，就停下，不要继续往目标方块中心挤
-        if (distance <= reachSqr) {
-            villager.getNavigation().stop();
-            return;
-        }
-
-        villager.getNavigation().moveTo(
-                target.getX() + 0.5D,
-                target.getY(),
-                target.getZ() + 0.5D,
-                speed
-        );
-
-    }
     public static void lookAtTargetPlace(Villager villager) {
         if (!hasTargetPlace(villager)) {
             return;
@@ -639,7 +612,7 @@ public class SmartVillagerData {
 
         boolean closeToStorage = moveToTargetPlace(
                 villager,
-                REACH_HOME,
+                PLACE_STORAGE,
                 SPEED_NORMAL
         );
 

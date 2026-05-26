@@ -31,9 +31,9 @@ public class BuilderHandler {
                     // 如果当前已经有 target_place，每 5 tick 维护一次寻路方向
                     if (SmartVillagerData.hasTargetPlace(villager)
                             && SmartVillagerData.shouldThink(villager, 5)) {
-                        SmartVillagerData.keepMovingToTargetPlace(
+                        SmartVillagerData.moveToTargetPlace(
                                 villager,
-                                SmartVillagerData.REACH_BUILD,
+                                SmartVillagerData.PLACE_BUILD_HOUSE,
                                 SmartVillagerData.SPEED_WORK
                         );
                     }
@@ -164,11 +164,6 @@ public class BuilderHandler {
                                             targetPos.getY() + 0.5D,
                                             targetPos.getZ() + 0.5D
                                     );
-
-//                                    if (distance > SmartVillagerData.REACH_BUILD) {
-//                                        // 超出当前工地锚点的操作范围，先跳过
-//                                        continue;
-//                                    }
 
                                     sourceContainer.removeItem(sourceSlot, 1);
                                     sourceContainer.setChanged();
