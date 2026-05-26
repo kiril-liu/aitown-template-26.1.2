@@ -1,233 +1,190 @@
 package com.aitown.aitownmod;
 
-
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.tags.BlockTags;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.npc.villager.Villager;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.tick.EntityTickEvent;
-import net.minecraft.network.chat.Component;
-import net.minecraft.world.entity.player.Player;
+
+import java.util.List;
 
 @EventBusSubscriber(modid = aitown.MODID)
 public class LumberjackHandler {
+    private static final String KEY_STATE = "LumberjackState";
+
+    private static final String STATE_SEEK_TREE = "seek_tree";
+    private static final String STATE_MOVE_TO_TREE = "move_to_tree";
+    private static final String STATE_CHOP_TREE = "chop_tree";
+    private static final String STATE_CLEAN_DROPS = "clean_drops";
+    private static final String STATE_PLANT_SAPLING = "plant_sapling";
+    private static final String STATE_FETCH_SAPLING = "fetch_sapling";
+    private static final String STATE_DEPOSIT_ITEMS = "deposit_items";
+    private static final String STATE_WAIT = "wait";
+
+    private static final String KEY_TREE_X = "LumberjackTreeX";
+    private static final String KEY_TREE_Y = "LumberjackTreeY";
+    private static final String KEY_TREE_Z = "LumberjackTreeZ";
+
+    private static final String KEY_WORK_X = "LumberjackWorkX";
+    private static final String KEY_WORK_Y = "LumberjackWorkY";
+    private static final String KEY_WORK_Z = "LumberjackWorkZ";
+
+    private static final int TREE_SEARCH_RADIUS = 24;
+    private static final int MAX_BREAK_BLOCKS_PER_TICK = 6;
+    private static final int DEPOSIT_THRESHOLD = 24;
 
     @SubscribeEvent
     public static void onVillagerTick(EntityTickEvent.Pre event) {
-        if (!event.getEntity().level().isClientSide() && event.getEntity() instanceof Villager villager) {
+        if (event.getEntity().level().isClientSide()) {
+            return;
+        }
 
-            if (villager.getPersistentData().getBoolean("IsLumberjack").orElse(false)) {
-                SmartVillagerData.ensureIdentity(villager);
+        if (!(event.getEntity() instanceof Villager villager)) {
+            return;
+        }
 
-                if (!villager.getPersistentData().getBoolean("IsIdle").orElse(false)) {
-                    SmartVillagerData.suppressVanillaMovement(villager);
-                }
-                if (villager.getPersistentData().getBoolean("IsIdle").orElse(false)) return;
+        if (!SmartVillagerData.isRole(villager, SmartVillagerData.ROLE_LUMBERJACK)) {
+            return;
+        }
 
+        if (!(villager.level() instanceof net.minecraft.server.level.ServerLevel level)) {
+            return;
+        }
 
-                if (SmartVillagerData.shouldThink(villager, 10)) {
-                    SmartVillagerData.pickupNearbyItems(
-                            villager,
-                            2.0D,
-                            1.0D,
-                            stack -> {
-                                String itemName = net.minecraft.core.registries.BuiltInRegistries.ITEM
-                                        .getKey(stack.getItem())
-                                        .getPath();
+        SmartVillagerData.ensureIdentity(villager);
+        SmartVillagerData.suppressVanillaMovement(villager);
 
-                                return itemName.contains("_log")
-                                        || itemName.contains("sapling")
-                                        || itemName.equals("apple")
-                                        || itemName.equals("stick");
-                            }
-                    );
-                }
+        if (SmartVillagerData.shouldThink(villager, 10)) {
+            pickupDrops(level, villager, villager.blockPosition(), 2.5D, 1.5D);
+        }
 
-                if (SmartVillagerData.shouldThink(villager, 40)) {
-                    net.minecraft.server.level.ServerLevel level = (net.minecraft.server.level.ServerLevel) villager.level();
-                    SimpleContainer inventory = villager.getInventory();
+        if (!SmartVillagerData.shouldThink(villager, 5)) {
+            return;
+        }
 
-                    BlockPos homePos = getHomePos(villager);
+        String state = getState(villager);
 
-                    // ==========================================
-                    // 状态 A：原木够了，或者背包完全没空位了，强制回家存箱子！
-                    // ==========================================
-                    boolean handledDeposit = SmartVillagerData.handleDepositIfNeeded(
-                            level,
-                            villager,
-                            "伐木工",
-                            homePos,
-                            16,
-                            stack -> {
-                                String itemName = net.minecraft.core.registries.BuiltInRegistries.ITEM
-                                        .getKey(stack.getItem())
-                                        .getPath();
+        if (STATE_SEEK_TREE.equals(state)) {
+            tickSeekTree(level, villager);
+            return;
+        }
 
-                                return itemName.contains("_log")
-                                        || itemName.contains("sapling")
-                                        || itemName.equals("apple")
-                                        || itemName.equals("stick");
-                            }
-                    );
+        if (STATE_MOVE_TO_TREE.equals(state)) {
+            tickMoveToTree(level, villager);
+            return;
+        }
 
-                    if (handledDeposit) {
-                        return;
-                    }
+        if (STATE_CHOP_TREE.equals(state)) {
+            tickChopTree(level, villager);
+            return;
+        }
 
-                    BlockPos treeBase = findNearestRealTree(level, villager, 25);
+        if (STATE_CLEAN_DROPS.equals(state)) {
+            tickCleanDrops(level, villager);
+            return;
+        }
 
-                    if (treeBase != null) {
-                        BlockPos treeAnchor = getTreeAnchor(treeBase);
+        if (STATE_PLANT_SAPLING.equals(state)) {
+            tickPlantSapling(level, villager);
+            return;
+        }
 
-                        SmartVillagerData.setDisplayStatus(villager, "§a", "伐木中", "伐木工");
-                        SmartVillagerData.setTargetPlace(villager, treeAnchor, "chop_tree_anchor");
+        if (STATE_FETCH_SAPLING.equals(state)) {
+            tickFetchSapling(level, villager);
+            return;
+        }
 
-                        boolean arrived = SmartVillagerData.moveToTargetPlace(
-                                villager,
-                                SmartVillagerData.PLACE_CUT_TREE,
-                                SmartVillagerData.SPEED_NORMAL
-                        );
+        if (STATE_DEPOSIT_ITEMS.equals(state)) {
+            tickDepositItems(level, villager);
+            return;
+        }
 
-                        if (!arrived) {
-                            return;
-                        }
+        if (STATE_WAIT.equals(state)) {
+            tickWait(level, villager);
+            return;
+        }
 
-                        villager.getNavigation().stop();
-                        SmartVillagerData.lookAtTargetPlace(villager);
+        setState(villager, STATE_SEEK_TREE);
+    }
 
-                        chopWholeTreeAt(level, villager, treeBase);
+    private static void tickSeekTree(net.minecraft.server.level.ServerLevel level, Villager villager) {
+        SmartVillagerData.setStatus(villager, "寻找树木", "寻找附近成熟树");
 
-                        return;
-                    }
+        if (shouldDeposit(villager)) {
+            setState(villager, STATE_DEPOSIT_ITEMS);
+            return;
+        }
 
-                    // 没树，尝试种树
-                    if (tryPlantSapling(level, villager, inventory)) {
-                        return;
-                    }
+        BlockPos treeBase = findNearestRealTree(level, villager, TREE_SEARCH_RADIUS);
 
-                    // 没树也没树苗：在当前工作地点 idle
-                    BlockPos idlePos = SmartVillagerData.hasTargetPlace(villager)
-                            ? SmartVillagerData.getTargetPlace(villager)
-                            : villager.blockPosition();
+        if (treeBase == null) {
+            setState(villager, STATE_WAIT);
+            return;
+        }
 
-                    SmartVillagerData.setIdleAt(villager, "伐木工", idlePos);
-                }
-            }
+        BlockPos workPos = treeBase.offset(2, 0, 2);
+
+        savePos(villager, KEY_TREE_X, KEY_TREE_Y, KEY_TREE_Z, treeBase);
+        savePos(villager, KEY_WORK_X, KEY_WORK_Y, KEY_WORK_Z, workPos);
+
+        setState(villager, STATE_MOVE_TO_TREE);
+    }
+
+    private static void tickMoveToTree(net.minecraft.server.level.ServerLevel level, Villager villager) {
+        BlockPos treeBase = readPos(villager, KEY_TREE_X, KEY_TREE_Y, KEY_TREE_Z);
+        BlockPos workPos = readPos(villager, KEY_WORK_X, KEY_WORK_Y, KEY_WORK_Z);
+
+        if (treeBase == null || workPos == null) {
+            setState(villager, STATE_SEEK_TREE);
+            return;
+        }
+
+        if (!isRealTreeAt(level, treeBase)) {
+            setState(villager, STATE_SEEK_TREE);
+            return;
+        }
+
+        SmartVillagerData.setStatus(villager, "走向树木", "前往伐木位置");
+        SmartVillagerData.setTargetPlace(villager, workPos, "lumberjack_tree_work_pos");
+
+        boolean arrived = SmartVillagerData.moveToTargetPlace(
+                villager,
+                SmartVillagerData.PLACE_WORK,
+                SmartVillagerData.SPEED_NORMAL
+        );
+
+        if (arrived) {
+            setState(villager, STATE_CHOP_TREE);
         }
     }
 
-    private static boolean isRealTreeAt(
-            net.minecraft.server.level.ServerLevel level,
-            BlockPos base
-    ) {
-        BlockPos.MutableBlockPos mPos = new BlockPos.MutableBlockPos();
+    private static void tickChopTree(net.minecraft.server.level.ServerLevel level, Villager villager) {
+        BlockPos treeBase = readPos(villager, KEY_TREE_X, KEY_TREE_Y, KEY_TREE_Z);
 
-        int logCount = 0;
-        boolean foundLeaves = false;
-
-        // 从当前原木往上找连续原木
-        for (int up = 0; up <= 12; up++) {
-            mPos.set(base.getX(), base.getY() + up, base.getZ());
-
-            BlockState state = level.getBlockState(mPos);
-
-            if (state.is(net.minecraft.tags.BlockTags.LOGS)) {
-                logCount++;
-                continue;
-            }
-
-            // 原木断了以后，在附近找树叶
-            for (int dx = -3; dx <= 3; dx++) {
-                for (int dy = -2; dy <= 3; dy++) {
-                    for (int dz = -3; dz <= 3; dz++) {
-                        BlockPos leafPos = mPos.offset(dx, dy, dz);
-                        BlockState leafState = level.getBlockState(leafPos);
-
-                        if (leafState.is(net.minecraft.tags.BlockTags.LEAVES)) {
-                            foundLeaves = true;
-                            break;
-                        }
-                    }
-
-                    if (foundLeaves) break;
-                }
-
-                if (foundLeaves) break;
-            }
-
-            break;
+        if (treeBase == null) {
+            setState(villager, STATE_SEEK_TREE);
+            return;
         }
 
-        return logCount >= 2 && foundLeaves;
-    }
+        SmartVillagerData.setStatus(villager, "伐木中", "分批砍伐树干和树叶");
 
-    private static boolean chopWholeTreeAt(
-            net.minecraft.server.level.ServerLevel level,
-            Villager villager,
-            BlockPos base
-    ) {
-        boolean didWork = false;
+        int broken = chopTreeStep(level, villager, treeBase);
 
-        BlockPos.MutableBlockPos mPos = new BlockPos.MutableBlockPos();
+        if (broken > 0) {
+            villager.swing(InteractionHand.MAIN_HAND);
 
-        // 1. 先砍原木
-        for (int dx = -2; dx <= 2; dx++) {
-            for (int dy = 0; dy <= 12; dy++) {
-                for (int dz = -2; dz <= 2; dz++) {
-                    mPos.set(base.getX() + dx, base.getY() + dy, base.getZ() + dz);
-
-                    BlockState state = level.getBlockState(mPos);
-
-                    if (state.is(net.minecraft.tags.BlockTags.LOGS)) {
-                        double dist = villager.distanceToSqr(
-                                mPos.getX() + 0.5D,
-                                mPos.getY() + 0.5D,
-                                mPos.getZ() + 0.5D
-                        );
-
-                        if (dist <= SmartVillagerData.DISTANCE_CHOP) {
-                            level.destroyBlock(mPos, true);
-                            villager.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
-                            didWork = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        // 2. 再清树叶
-        for (int dx = -5; dx <= 5; dx++) {
-            for (int dy = 0; dy <= 14; dy++) {
-                for (int dz = -5; dz <= 5; dz++) {
-                    mPos.set(base.getX() + dx, base.getY() + dy, base.getZ() + dz);
-
-                    BlockState state = level.getBlockState(mPos);
-
-                    if (state.is(net.minecraft.tags.BlockTags.LEAVES)) {
-                        double dist = villager.distanceToSqr(
-                                mPos.getX() + 0.5D,
-                                mPos.getY() + 0.5D,
-                                mPos.getZ() + 0.5D
-                        );
-
-                        if (dist <= SmartVillagerData.DISTANCE_LEAF) {
-                            level.destroyBlock(mPos, true);
-                            didWork = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        if (didWork) {
-            villager.level().playSound(
+            level.playSound(
                     null,
                     villager.blockPosition(),
                     SoundEvents.WOOD_BREAK,
@@ -235,9 +192,205 @@ public class LumberjackHandler {
                     0.8F,
                     1.0F
             );
+
+            return;
         }
 
-        return didWork;
+        setState(villager, STATE_CLEAN_DROPS);
+    }
+
+    private static void tickCleanDrops(net.minecraft.server.level.ServerLevel level, Villager villager) {
+        BlockPos treeBase = readPos(villager, KEY_TREE_X, KEY_TREE_Y, KEY_TREE_Z);
+
+        if (treeBase == null) {
+            setState(villager, STATE_PLANT_SAPLING);
+            return;
+        }
+
+        SmartVillagerData.setStatus(villager, "清理掉落物", "收集原木、苹果、木棍、树苗");
+
+        pickupDrops(level, villager, treeBase, 7.0D, 4.0D);
+
+        setState(villager, STATE_PLANT_SAPLING);
+    }
+
+    private static void tickPlantSapling(net.minecraft.server.level.ServerLevel level, Villager villager) {
+        BlockPos treeBase = readPos(villager, KEY_TREE_X, KEY_TREE_Y, KEY_TREE_Z);
+
+        if (treeBase == null) {
+            setState(villager, STATE_DEPOSIT_ITEMS);
+            return;
+        }
+
+        SmartVillagerData.setStatus(villager, "补种树苗", "在砍树位置补种");
+
+        if (!hasSapling(villager.getInventory())) {
+            setState(villager, STATE_FETCH_SAPLING);
+            return;
+        }
+
+        BlockPos planted = plantSaplingNear(level, villager, treeBase);
+
+        if (planted != null) {
+            savePos(villager, KEY_WORK_X, KEY_WORK_Y, KEY_WORK_Z, planted.offset(2, 0, 0));
+        }
+
+        setState(villager, STATE_DEPOSIT_ITEMS);
+    }
+
+    private static void tickFetchSapling(net.minecraft.server.level.ServerLevel level, Villager villager) {
+        BlockPos warehouse = SmartVillagerData.getWarehouseCenter(villager);
+
+        SmartVillagerData.setStatus(villager, "仓库取树苗", "缺树苗，去仓库拿");
+
+        SmartVillagerData.setTargetPlace(villager, warehouse, "lumberjack_fetch_sapling");
+
+        boolean arrived = SmartVillagerData.moveToTargetPlace(
+                villager,
+                SmartVillagerData.PLACE_STORAGE,
+                SmartVillagerData.SPEED_NORMAL
+        );
+
+        if (!arrived) {
+            return;
+        }
+
+        int moved = SmartVillagerData.takeItemsFromWarehouse(
+                level,
+                villager,
+                warehouse,
+                List.of(
+                        new SmartVillagerData.ItemRequest("minecraft:oak_sapling", 8),
+                        new SmartVillagerData.ItemRequest("minecraft:spruce_sapling", 8),
+                        new SmartVillagerData.ItemRequest("minecraft:birch_sapling", 8)
+                ),
+                SmartVillagerData.WAREHOUSE_RADIUS
+        );
+
+        if (moved > 0) {
+            setState(villager, STATE_PLANT_SAPLING);
+        } else {
+            SmartVillagerData.setStatus(villager, "等待树苗", "仓库没有树苗");
+        }
+    }
+
+    private static void tickDepositItems(net.minecraft.server.level.ServerLevel level, Villager villager) {
+        if (!hasDepositItems(villager)) {
+            setState(villager, STATE_WAIT);
+            return;
+        }
+
+        BlockPos warehouse = SmartVillagerData.getWarehouseCenter(villager);
+
+        SmartVillagerData.setStatus(villager, "存入仓库", "把伐木产物放入仓库");
+
+        SmartVillagerData.setTargetPlace(villager, warehouse, "lumberjack_deposit");
+
+        boolean arrived = SmartVillagerData.moveToTargetPlace(
+                villager,
+                SmartVillagerData.PLACE_STORAGE,
+                SmartVillagerData.SPEED_NORMAL
+        );
+
+        if (!arrived) {
+            return;
+        }
+
+        SmartVillagerData.depositItemsToWarehouse(
+                level,
+                villager,
+                warehouse,
+                List.of(
+                        new SmartVillagerData.ItemRequest("minecraft:oak_log", 999),
+                        new SmartVillagerData.ItemRequest("minecraft:oak_wood", 999),
+                        new SmartVillagerData.ItemRequest("minecraft:apple", 999),
+                        new SmartVillagerData.ItemRequest("minecraft:stick", 999),
+                        new SmartVillagerData.ItemRequest("minecraft:oak_sapling", 999),
+                        new SmartVillagerData.ItemRequest("minecraft:spruce_sapling", 999),
+                        new SmartVillagerData.ItemRequest("minecraft:birch_sapling", 999)
+                ),
+                SmartVillagerData.WAREHOUSE_RADIUS
+        );
+
+        setState(villager, STATE_WAIT);
+    }
+
+    private static void tickWait(net.minecraft.server.level.ServerLevel level, Villager villager) {
+        SmartVillagerData.setStatus(villager, "等待树长大", "等待树苗成长或寻找新树");
+
+        BlockPos workPos = readPos(villager, KEY_WORK_X, KEY_WORK_Y, KEY_WORK_Z);
+
+        if (workPos != null) {
+            SmartVillagerData.setTargetPlace(villager, workPos, "lumberjack_wait");
+            SmartVillagerData.moveToTargetPlace(
+                    villager,
+                    SmartVillagerData.PLACE_WORK,
+                    SmartVillagerData.SPEED_SLOW
+            );
+        }
+
+        if (!SmartVillagerData.shouldThink(villager, 40)) {
+            return;
+        }
+
+        BlockPos tree = findNearestRealTree(level, villager, TREE_SEARCH_RADIUS);
+
+        if (tree != null) {
+            savePos(villager, KEY_TREE_X, KEY_TREE_Y, KEY_TREE_Z, tree);
+            savePos(villager, KEY_WORK_X, KEY_WORK_Y, KEY_WORK_Z, tree.offset(2, 0, 2));
+            setState(villager, STATE_MOVE_TO_TREE);
+        }
+    }
+
+    private static int chopTreeStep(net.minecraft.server.level.ServerLevel level, Villager villager, BlockPos treeBase) {
+        int broken = breakBlocks(level, villager, treeBase, true, MAX_BREAK_BLOCKS_PER_TICK);
+
+        if (broken >= MAX_BREAK_BLOCKS_PER_TICK) {
+            return broken;
+        }
+
+        return broken + breakBlocks(level, villager, treeBase, false, MAX_BREAK_BLOCKS_PER_TICK - broken);
+    }
+
+    private static int breakBlocks(
+            net.minecraft.server.level.ServerLevel level,
+            Villager villager,
+            BlockPos treeBase,
+            boolean logsOnly,
+            int limit
+    ) {
+        int broken = 0;
+        int radius = logsOnly ? 2 : 5;
+        int height = logsOnly ? 12 : 14;
+
+        BlockPos.MutableBlockPos mPos = new BlockPos.MutableBlockPos();
+
+        for (int dy = 0; dy <= height; dy++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    mPos.set(treeBase.getX() + dx, treeBase.getY() + dy, treeBase.getZ() + dz);
+
+                    BlockState state = level.getBlockState(mPos);
+
+                    boolean shouldBreak = logsOnly
+                            ? state.is(BlockTags.LOGS)
+                            : state.is(BlockTags.LEAVES);
+
+                    if (!shouldBreak) {
+                        continue;
+                    }
+
+                    level.destroyBlock(mPos.immutable(), true);
+                    broken++;
+
+                    if (broken >= limit) {
+                        return broken;
+                    }
+                }
+            }
+        }
+
+        return broken;
     }
 
     private static BlockPos findNearestRealTree(
@@ -248,36 +401,28 @@ public class LumberjackHandler {
         BlockPos.MutableBlockPos mPos = new BlockPos.MutableBlockPos();
 
         BlockPos bestTree = null;
-        double bestDist = Double.MAX_VALUE;
+        double bestDistance = Double.MAX_VALUE;
 
         for (int dx = -radius; dx <= radius; dx++) {
-            for (int dy = -2; dy <= 8; dy++) {
+            for (int dy = -3; dy <= 8; dy++) {
                 for (int dz = -radius; dz <= radius; dz++) {
-                    mPos.set(
-                            villager.getBlockX() + dx,
-                            villager.getBlockY() + dy,
-                            villager.getBlockZ() + dz
-                    );
+                    mPos.set(villager.getBlockX() + dx, villager.getBlockY() + dy, villager.getBlockZ() + dz);
 
-                    BlockState state = level.getBlockState(mPos);
-
-                    if (!state.is(net.minecraft.tags.BlockTags.LOGS)) {
+                    if (!level.getBlockState(mPos).is(BlockTags.LOGS)) {
                         continue;
                     }
 
-                    if (!isRealTreeAt(level, mPos)) {
+                    BlockPos base = findLowestLog(level, mPos.immutable());
+
+                    if (!isRealTreeAt(level, base)) {
                         continue;
                     }
 
-                    double dist = villager.distanceToSqr(
-                            mPos.getX() + 0.5D,
-                            mPos.getY(),
-                            mPos.getZ() + 0.5D
-                    );
+                    double distance = villager.distanceToSqr(base.getX() + 0.5D, base.getY(), base.getZ() + 0.5D);
 
-                    if (dist < bestDist) {
-                        bestDist = dist;
-                        bestTree = mPos.immutable();
+                    if (distance < bestDistance) {
+                        bestDistance = distance;
+                        bestTree = base;
                     }
                 }
             }
@@ -285,183 +430,213 @@ public class LumberjackHandler {
 
         return bestTree;
     }
-    private static BlockPos getTreeAnchor(BlockPos treeBase) {
-        return treeBase.offset(2, 0, 2);
-    }
-    private static boolean hasNearbySaplingOrLog(
-            net.minecraft.server.level.ServerLevel level,
-            BlockPos pos,
-            int radius
-    ) {
-        BlockPos.MutableBlockPos mPos = new BlockPos.MutableBlockPos();
 
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dy = -1; dy <= 3; dy++) {
-                for (int dz = -radius; dz <= radius; dz++) {
-                    mPos.set(pos.getX() + dx, pos.getY() + dy, pos.getZ() + dz);
+    private static BlockPos findLowestLog(net.minecraft.server.level.ServerLevel level, BlockPos start) {
+        BlockPos current = start;
 
-                    BlockState state = level.getBlockState(mPos);
+        for (int i = 0; i < 12; i++) {
+            BlockPos below = current.below();
 
-                    String blockName = net.minecraft.core.registries.BuiltInRegistries.BLOCK
-                            .getKey(state.getBlock())
-                            .getPath();
-
-                    if (state.is(net.minecraft.tags.BlockTags.LOGS)
-                            || blockName.contains("sapling")) {
-                        return true;
-                    }
-                }
+            if (!level.getBlockState(below).is(BlockTags.LOGS)) {
+                break;
             }
+
+            current = below;
         }
 
-        return false;
+        return current;
     }
-    private static BlockPos getHomePos(Villager villager) {
-        int x = villager.getPersistentData().getInt("HomeX").orElse(villager.getBlockX());
-        int y = villager.getPersistentData().getInt("HomeY").orElse(villager.getBlockY());
-        int z = villager.getPersistentData().getInt("HomeZ").orElse(villager.getBlockZ());
 
-        return new BlockPos(x, y, z);
-    }
-    private static boolean tryPlantSapling(
-            net.minecraft.server.level.ServerLevel level,
-            Villager villager,
-            SimpleContainer inventory
-    ) {
-        ItemStack saplingStack = ItemStack.EMPTY;
-        int saplingSlot = -1;
+    private static boolean isRealTreeAt(net.minecraft.server.level.ServerLevel level, BlockPos base) {
+        int logCount = 0;
+        boolean foundLeaves = false;
 
-        // 1. 先从伐木工背包里找树苗
-        for (int i = 0; i < inventory.getContainerSize(); i++) {
-            ItemStack stack = inventory.getItem(i);
+        BlockPos.MutableBlockPos mPos = new BlockPos.MutableBlockPos();
 
-            if (stack.isEmpty()) {
+        for (int up = 0; up <= 12; up++) {
+            mPos.set(base.getX(), base.getY() + up, base.getZ());
+
+            BlockState state = level.getBlockState(mPos);
+
+            if (state.is(BlockTags.LOGS)) {
+                logCount++;
                 continue;
             }
 
-            String itemName = net.minecraft.core.registries.BuiltInRegistries.ITEM
-                    .getKey(stack.getItem())
-                    .getPath();
-
-            if (itemName.contains("sapling")
-                    && stack.getItem() instanceof net.minecraft.world.item.BlockItem) {
-                saplingStack = stack;
-                saplingSlot = i;
-                break;
-            }
-        }
-
-        // 背包里没有树苗，就不处理种树
-        if (saplingStack.isEmpty() || saplingSlot < 0) {
-            return false;
-        }
-
-        // 2. 选择搜索中心：
-        // 如果有 targetPlace，就围绕当前工作地点找；
-        // 否则围绕村民当前位置找。
-        BlockPos center = SmartVillagerData.hasTargetPlace(villager)
-                ? SmartVillagerData.getTargetPlace(villager)
-                : villager.blockPosition();
-
-        BlockPos.MutableBlockPos plantPos = new BlockPos.MutableBlockPos();
-
-        // 3. 搜索附近适合种树的位置
-        // 半径可以稍微大一点，不要只在脚边找。
-        int searchRadius = 8;
-
-        for (int dx = -searchRadius; dx <= searchRadius; dx++) {
-            for (int dz = -searchRadius; dz <= searchRadius; dz++) {
-                for (int dy = -1; dy <= 2; dy++) {
-                    plantPos.set(
-                            center.getX() + dx,
-                            center.getY() + dy,
-                            center.getZ() + dz
-                    );
-
-                    BlockState ground = level.getBlockState(plantPos.below());
-                    BlockState space = level.getBlockState(plantPos);
-
-                    // 4. 地面必须适合种树
-                    boolean validGround =
-                            ground.is(net.minecraft.world.level.block.Blocks.GRASS_BLOCK)
-                                    || ground.is(net.minecraft.world.level.block.Blocks.DIRT)
-                                    || ground.is(net.minecraft.world.level.block.Blocks.COARSE_DIRT)
-                                    || ground.is(net.minecraft.world.level.block.Blocks.PODZOL);
-
-                    if (!validGround) {
-                        continue;
+            for (int dx = -4; dx <= 4; dx++) {
+                for (int dy = -2; dy <= 4; dy++) {
+                    for (int dz = -4; dz <= 4; dz++) {
+                        if (level.getBlockState(mPos.offset(dx, dy, dz)).is(BlockTags.LEAVES)) {
+                            foundLeaves = true;
+                            break;
+                        }
                     }
 
-                    // 5. 树苗所在位置必须是空气
-                    if (!space.isAir()) {
-                        continue;
+                    if (foundLeaves) {
+                        break;
                     }
+                }
 
-                    // 6. 不要在自己太近的位置种树，避免树长大后把伐木工卡住
-                    double distToVillager = villager.distanceToSqr(
-                            plantPos.getX() + 0.5D,
-                            plantPos.getY(),
-                            plantPos.getZ() + 0.5D
-                    );
-
-                    if (distToVillager < 16.0D) { // 4 格以内不种
-                        continue;
-                    }
-
-                    // 7. 附近已经有树苗或原木，就不要再种
-                    // 这样可以保证树之间大概隔开 5 格左右。
-                    if (hasNearbySaplingOrLog(level, plantPos, 5)) {
-                        continue;
-                    }
-
-                    // 8. 找到合适位置后，先把它设为目标点
-                    SmartVillagerData.setDisplayStatus(villager, "§2", "种树", "伐木工");
-                    SmartVillagerData.setTargetPlace(villager, plantPos.immutable(), "plant_sapling");
-
-                    boolean arrived = SmartVillagerData.moveToTargetPlace(
-                            villager,
-                            SmartVillagerData.PLACE_PLANT_TREE,
-                            SmartVillagerData.SPEED_NORMAL
-                    );
-
-                    // 还没走到种树位置，就先继续移动
-                    if (!arrived) {
-                        return true;
-                    }
-
-                    // 9. 已经靠近，开始种树
-                    net.minecraft.world.item.BlockItem saplingItem =
-                            (net.minecraft.world.item.BlockItem) saplingStack.getItem();
-
-                    level.setBlockAndUpdate(
-                            plantPos,
-                            saplingItem.getBlock().defaultBlockState()
-                    );
-
-                    saplingStack.shrink(1);
-                    inventory.setChanged();
-
-                    villager.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
-
-                    villager.level().playSound(
-                            null,
-                            plantPos,
-                            SoundEvents.GRASS_PLACE,
-                            SoundSource.NEUTRAL,
-                            1.0F,
-                            1.0F
-                    );
-
-                    SmartVillagerData.clearTargetPlace(villager);
-
-                    return true;
+                if (foundLeaves) {
+                    break;
                 }
             }
+
+            break;
         }
 
-        // 有树苗，但是附近没有找到合适位置
-        return false;
+        return logCount >= 2 && foundLeaves;
     }
 
+    private static boolean pickupDrops(
+            net.minecraft.server.level.ServerLevel level,
+            Villager villager,
+            BlockPos center,
+            double horizontalRadius,
+            double verticalRadius
+    ) {
+        boolean picked = false;
 
+        AABB box = new AABB(center).inflate(horizontalRadius, verticalRadius, horizontalRadius);
+        SimpleContainer inventory = villager.getInventory();
+
+        for (ItemEntity itemEntity : level.getEntitiesOfClass(ItemEntity.class, box)) {
+            ItemStack stack = itemEntity.getItem();
+
+            if (!isLumberjackProduct(stack)) {
+                continue;
+            }
+
+            ItemStack moving = stack.copy();
+            ItemStack remaining = inventory.addItem(moving);
+            int moved = stack.getCount() - remaining.getCount();
+
+            if (moved <= 0) {
+                continue;
+            }
+
+            stack.shrink(moved);
+
+            if (stack.isEmpty()) {
+                itemEntity.discard();
+            } else {
+                itemEntity.setItem(stack);
+            }
+
+            inventory.setChanged();
+            picked = true;
+        }
+
+        return picked;
+    }
+
+    private static BlockPos plantSaplingNear(
+            net.minecraft.server.level.ServerLevel level,
+            Villager villager,
+            BlockPos preferredPos
+    ) {
+        SimpleContainer inventory = villager.getInventory();
+
+        int slot = findSaplingSlot(inventory);
+
+        if (slot < 0) {
+            return null;
+        }
+
+        ItemStack stack = inventory.getItem(slot);
+
+        if (!(stack.getItem() instanceof BlockItem blockItem)) {
+            return null;
+        }
+
+        BlockState saplingState = blockItem.getBlock().defaultBlockState();
+
+        if (level.getBlockState(preferredPos).isAir() && saplingState.canSurvive(level, preferredPos)) {
+            level.setBlockAndUpdate(preferredPos, saplingState);
+            stack.shrink(1);
+            inventory.setChanged();
+            villager.swing(InteractionHand.MAIN_HAND);
+            return preferredPos;
+        }
+
+        return null;
+    }
+
+    private static int findSaplingSlot(SimpleContainer inventory) {
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
+
+            if (!stack.isEmpty() && isSapling(stack)) {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static boolean hasSapling(SimpleContainer inventory) {
+        return findSaplingSlot(inventory) >= 0;
+    }
+
+    private static boolean shouldDeposit(Villager villager) {
+        return countLumberjackProducts(villager.getInventory()) >= DEPOSIT_THRESHOLD;
+    }
+
+    private static boolean hasDepositItems(Villager villager) {
+        return countLumberjackProducts(villager.getInventory()) > 0;
+    }
+
+    private static int countLumberjackProducts(SimpleContainer inventory) {
+        int count = 0;
+
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
+
+            if (!stack.isEmpty() && isLumberjackProduct(stack)) {
+                count += stack.getCount();
+            }
+        }
+
+        return count;
+    }
+
+    private static boolean isSapling(ItemStack stack) {
+        return SmartVillagerData.itemId(stack).contains("sapling");
+    }
+
+    private static boolean isLumberjackProduct(ItemStack stack) {
+        String itemName = SmartVillagerData.itemId(stack);
+
+        return itemName.contains("_log")
+                || itemName.contains("_wood")
+                || itemName.contains("sapling")
+                || itemName.equals("minecraft:apple")
+                || itemName.equals("minecraft:stick");
+    }
+
+    private static String getState(Villager villager) {
+        return villager.getPersistentData().getString(KEY_STATE).orElse(STATE_SEEK_TREE);
+    }
+
+    private static void setState(Villager villager, String state) {
+        villager.getPersistentData().putString(KEY_STATE, state);
+    }
+
+    private static void savePos(Villager villager, String keyX, String keyY, String keyZ, BlockPos pos) {
+        villager.getPersistentData().putInt(keyX, pos.getX());
+        villager.getPersistentData().putInt(keyY, pos.getY());
+        villager.getPersistentData().putInt(keyZ, pos.getZ());
+    }
+
+    private static BlockPos readPos(Villager villager, String keyX, String keyY, String keyZ) {
+        if (!villager.getPersistentData().contains(keyX)) {
+            return null;
+        }
+
+        return new BlockPos(
+                villager.getPersistentData().getInt(keyX).orElse(0),
+                villager.getPersistentData().getInt(keyY).orElse(0),
+                villager.getPersistentData().getInt(keyZ).orElse(0)
+        );
+    }
 }

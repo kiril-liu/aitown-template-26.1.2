@@ -1,282 +1,492 @@
 package com.aitown.aitownmod;
 
 import net.minecraft.core.BlockPos;
-
-import net.minecraft.network.chat.Component;
-
+import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.SimpleContainer;
-
 import net.minecraft.world.entity.npc.villager.Villager;
-import net.minecraft.world.entity.player.Player;
-
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.DoorBlock;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
+import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.tick.EntityTickEvent;
 
+import java.util.List;
+
 @EventBusSubscriber(modid = aitown.MODID)
 public class BuilderHandler {
+    private static final String KEY_STATE = "BuilderState";
+
+    private static final String STATE_FIND_SITE = "find_site";
+    private static final String STATE_FETCH_MATERIALS = "fetch_materials";
+    private static final String STATE_MOVE_TO_DOOR = "move_to_door";
+    private static final String STATE_BUILD = "build";
+
+    private static final String KEY_BUILD_X = "BuildCenterX";
+    private static final String KEY_BUILD_Y = "BuildCenterY";
+    private static final String KEY_BUILD_Z = "BuildCenterZ";
+
+    private static final String KEY_DOOR_X = "BuilderDoorX";
+    private static final String KEY_DOOR_Y = "BuilderDoorY";
+    private static final String KEY_DOOR_Z = "BuilderDoorZ";
+
+    private static final String KEY_BLUEPRINT = "BlueprintName";
+
+    private static final int SITE_SEARCH_RADIUS = 40;
+    private static final int SITE_MARGIN = 2;
+    private static final int TARGET_OAK_LOGS = 48;
+    private static final int MAX_PLACE_PER_TICK = 4;
+    private static final int TARGET_COBBLESTONE = 64;
 
     @SubscribeEvent
     public static void onVillagerTick(EntityTickEvent.Pre event) {
-        if (!event.getEntity().level().isClientSide() && event.getEntity() instanceof Villager villager) {
-
-            //if (villager.hasCustomName() && villager.getCustomName().getString().contains("智能建筑工")) {
-            if (villager.getPersistentData().contains("IsBuilding")) {
-                SmartVillagerData.ensureIdentity(villager);
-
-                // 有建筑任务时，压制原版村民自由移动
-                if (villager.getPersistentData().getBoolean("IsBuilding").orElse(false)) {
-                    SmartVillagerData.suppressVanillaMovement(villager);
-
-                    // 如果当前已经有 target_place，每 5 tick 维护一次寻路方向
-                    if (SmartVillagerData.hasTargetPlace(villager)
-                            && SmartVillagerData.shouldThink(villager, 5)) {
-                        SmartVillagerData.moveToTargetPlace(
-                                villager,
-                                SmartVillagerData.PLACE_BUILD_HOUSE,
-                                SmartVillagerData.SPEED_WORK
-                        );
-                    }
-                }
-
-                // 1. 建筑工补充工作背包
-                // 建筑工不再捡地上的方块，而是从附近箱子拿橡木原木。
-                // ==========================================
-                if (SmartVillagerData.shouldThink(villager, 20)) {
-                    restockBuilderBackpack(villager);
-                }
-                // ==========================================
-                // 2. 核心建筑 AI
-                // ==========================================
-                //if (villager.tickCount % 10 == 0 && villager.getPersistentData().getBoolean("IsBuilding").orElse(false)) {
-                if (SmartVillagerData.shouldThink(villager, 20)
-                        && villager.getPersistentData().getBoolean("IsBuilding").orElse(false)) {
-                    int cx = villager.getPersistentData().getInt("BuildCenterX").orElse(0);
-                    int cy = villager.getPersistentData().getInt("BuildCenterY").orElse(0);
-                    int cz = villager.getPersistentData().getInt("BuildCenterZ").orElse(0);
-                    net.minecraft.core.BlockPos center = new net.minecraft.core.BlockPos(cx, cy, cz);
-
-                    net.minecraft.server.level.ServerLevel serverLevel = (net.minecraft.server.level.ServerLevel) villager.level();
-                    net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager structureManager = serverLevel.getServer().getStructureManager();
-
-                    String blueprintName = villager.getPersistentData().getString("BlueprintName").orElse("minecraft:village/plains/houses/plains_small_house_1");
-                    net.minecraft.resources.Identifier structureId = net.minecraft.resources.Identifier.parse(blueprintName);
-
-                    java.util.Optional<net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate> optionalTemplate = structureManager.get(structureId);
-
-                    if (optionalTemplate.isPresent()) {
-                        net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate template = optionalTemplate.get();
-                        boolean isFinished = true;
-                        boolean missingMaterials = false;
-                        String missingBlockName = "";
-
-                        java.util.List<net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate.StructureBlockInfo> blocks = new java.util.ArrayList<>();
-                        try {
-                            java.lang.reflect.Field palettesField = net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate.class.getDeclaredField("palettes");
-                            palettesField.setAccessible(true);
-                            java.util.List<net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate.Palette> palettesList =
-                                    (java.util.List<net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate.Palette>) palettesField.get(template);
-                            if (!palettesList.isEmpty()) {
-                                blocks = palettesList.get(0).blocks();
-                            }
-                        } catch (Exception e) {
-                            e.printStackTrace();
-                        }
-
-                        for (net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate.StructureBlockInfo blockInfo : blocks) {
-                            //net.minecraft.world.level.block.state.BlockState requiredState = blockInfo.state();
-
-                            net.minecraft.world.level.block.state.BlockState requiredState = blockInfo.state();
-
-                            requiredState = normalizeToWoodenHouse(requiredState);
-
-                            if (requiredState == null) {
-                                continue;
-                            }
-
-                            if (requiredState.isAir() || requiredState.is(net.minecraft.world.level.block.Blocks.STRUCTURE_VOID)) {
-                                continue;
-                            }
-
-                            net.minecraft.core.BlockPos targetPos = center.offset(blockInfo.pos());
-                            net.minecraft.world.level.block.state.BlockState currentState = serverLevel.getBlockState(targetPos);
-
-                            if (!currentState.is(requiredState.getBlock())) {
-                                isFinished = false;
-
-                                net.minecraft.world.item.Item requiredItem = requiredState.getBlock().asItem();
-                                boolean hasMaterial = false;
-                                net.minecraft.world.Container sourceContainer = null;
-                                int sourceSlot = -1;
-
-                                // A. 找村民自己的背包
-                                SimpleContainer inventory = villager.getInventory();
-                                for (int i = 0; i < inventory.getContainerSize(); i++) {
-                                    if (!inventory.getItem(i).isEmpty() && inventory.getItem(i).getItem() == requiredItem) {
-                                        hasMaterial = true;
-                                        sourceContainer = inventory;
-                                        sourceSlot = i;
-                                        break;
-                                    }
-                                }
-
-                                // B. 开启“蓝牙”扫描周围 10 格的所有容器（箱子/木桶等）
-                                if (!hasMaterial) {
-                                    int radius = 10;
-                                    net.minecraft.core.BlockPos.MutableBlockPos mutablePos = new net.minecraft.core.BlockPos.MutableBlockPos();
-                                    searchChests:
-                                    for (int dx = -radius; dx <= radius; dx++) {
-                                        for (int dy = -4; dy <= 4; dy++) {
-                                            for (int dz = -radius; dz <= radius; dz++) {
-                                                mutablePos.set(center.getX() + dx, center.getY() + dy, center.getZ() + dz);
-                                                net.minecraft.world.level.block.entity.BlockEntity be = serverLevel.getBlockEntity(mutablePos);
-                                                if (be instanceof net.minecraft.world.Container chest) {
-                                                    for (int i = 0; i < chest.getContainerSize(); i++) {
-                                                        if (!chest.getItem(i).isEmpty() && chest.getItem(i).getItem() == requiredItem) {
-                                                            hasMaterial = true;
-                                                            sourceContainer = chest;
-                                                            sourceSlot = i;
-                                                            break searchChests;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // ==========================================
-                                // C. 【新增】随身工作台：没找到材料？尝试在大脑里合成！
-                                // ==========================================
-                                if (!hasMaterial) {
-
-                                    if (tryCraftFromOakLog(serverLevel, villager, center, requiredItem)) {
-                                        debugBuilder(villager, "使用橡木原木合成："
-                                                + net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(requiredItem).getPath());
-                                        return;
-                                    }
-                                }
-                                if (hasMaterial) {
-                                    SmartVillagerData.setDisplayStatus(villager, "§e", "施工中", "建筑工");
-
-                                    double distance = villager.distanceToSqr(
-                                            targetPos.getX() + 0.5D,
-                                            targetPos.getY() + 0.5D,
-                                            targetPos.getZ() + 0.5D
-                                    );
-
-                                    sourceContainer.removeItem(sourceSlot, 1);
-                                    sourceContainer.setChanged();
-
-                                    boolean placed = villager.level().setBlockAndUpdate(targetPos, requiredState);
-
-                                    if (placed) {
-                                        villager.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
-                                        villager.level().playSound(
-                                                null,
-                                                targetPos,
-                                                net.minecraft.sounds.SoundEvents.WOOD_PLACE,
-                                                net.minecraft.sounds.SoundSource.NEUTRAL,
-                                                1.0F,
-                                                1.0F
-                                        );
-                                    }
-
-                                    return;
-                                } else {
-                                    missingMaterials = true;
-                                    missingBlockName = requiredState.getBlock().getName().getString();
-                                    debugBuilder(villager, "缺少材料：" + missingBlockName + "，目标方块=" + posText(targetPos));
-                                    // 【核心修复】发现缺材料立刻停工！不再扫描其它方块，防止卡死服务器导致点击无反应！
-                                    break;
-                                }
-                            }
-                        }
-
-                        // 8. 判定是否盖完
-                        if (isFinished) {
-                            villager.getPersistentData().putBoolean("IsBuilding", false);
-                            debugBuilder(villager, "找不到图纸：" + blueprintName);
-                            //villager.setCustomName(Component.literal("§7[闲置] 智能建筑工"));
-                            SmartVillagerData.setDisplayStatus(villager, "§7", "闲置", "建筑工");
-                            Player nearestPlayer = villager.level().getNearestPlayer(villager, 10.0D);
-                            if (nearestPlayer != null) {
-                                nearestPlayer.sendSystemMessage(Component.literal("§a[智能建筑工] 老板，图纸上的房子盖好啦！结工钱！"));
-                                villager.level().playSound(null, villager.blockPosition(), net.minecraft.sounds.SoundEvents.PLAYER_LEVELUP, net.minecraft.sounds.SoundSource.NEUTRAL, 1.0F, 1.0F);
-                            }
-                        } else if (missingMaterials && villager.tickCount % 60 == 0) {
-                            Player nearestPlayer = villager.level().getNearestPlayer(villager, 10.0D);
-                            if (nearestPlayer != null) {
-                                SmartVillagerData.setDisplayStatus(villager, "§c", "缺材料", "建筑工");
-                                nearestPlayer.sendSystemMessage(Component.literal("§c[智能建筑工] 没材料了！我目前急需：§e" + missingBlockName));
-                                villager.level().playSound(null, villager.blockPosition(), net.minecraft.sounds.SoundEvents.VILLAGER_NO, net.minecraft.sounds.SoundSource.NEUTRAL, 1.0F, 1.0F);
-                            }
-                        }
-                    } else {
-                        villager.getPersistentData().putBoolean("IsBuilding", false);
-                        debugBuilder(villager, "找不到图纸：" + blueprintName);
-                        Player nearestPlayer = villager.level().getNearestPlayer(villager, 10.0D);
-                        if (nearestPlayer != null) {
-                            nearestPlayer.sendSystemMessage(Component.literal("§c[智能建筑工] 找不到图纸啊！"));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private static void debugBuilder(Villager villager, String message) {
-        // 每 4 秒最多打印一次，避免刷屏
-        if (!SmartVillagerData.shouldThink(villager, 80)) {
+        if (event.getEntity().level().isClientSide()) {
             return;
         }
 
-        Player nearestPlayer = villager.level().getNearestPlayer(villager, 16.0D);
+        if (!(event.getEntity() instanceof Villager villager)) {
+            return;
+        }
 
-        if (nearestPlayer != null) {
-            nearestPlayer.sendSystemMessage(Component.literal(
-                    "§8[BuilderDebug][" + SmartVillagerData.getCitizenName(villager) + "] §7" + message
-            ));
+        if (!SmartVillagerData.isRole(villager, SmartVillagerData.ROLE_BUILDER)) {
+            return;
+        }
+
+        if (!(villager.level() instanceof net.minecraft.server.level.ServerLevel level)) {
+            return;
+        }
+
+        SmartVillagerData.ensureIdentity(villager);
+        SmartVillagerData.suppressVanillaMovement(villager);
+
+        if (!SmartVillagerData.shouldThink(villager, 10)) {
+            return;
+        }
+
+        String state = getState(villager);
+
+        if (STATE_FIND_SITE.equals(state)) {
+            tickFindSite(level, villager);
+            return;
+        }
+
+        if (STATE_FETCH_MATERIALS.equals(state)) {
+            tickFetchMaterials(level, villager);
+            return;
+        }
+
+        if (STATE_MOVE_TO_DOOR.equals(state)) {
+            tickMoveToDoor(level, villager);
+            return;
+        }
+
+        if (STATE_BUILD.equals(state)) {
+            tickBuild(level, villager);
+            return;
+        }
+
+        setState(villager, STATE_FIND_SITE);
+    }
+
+    private static void tickFindSite(net.minecraft.server.level.ServerLevel level, Villager villager) {
+        SmartVillagerData.setStatus(villager, "寻找空地", "根据蓝图尺寸寻找可建造区域");
+
+        List<StructureTemplate.StructureBlockInfo> blocks = loadTemplateBlocks(level, villager);
+
+        if (blocks.isEmpty()) {
+            SmartVillagerData.setStatus(villager, "无蓝图", "找不到房屋蓝图");
+            return;
+        }
+
+        BuildBounds bounds = calculateBounds(blocks);
+
+        BlockPos origin = findBuildableSite(level, villager, blocks, bounds);
+
+        if (origin == null) {
+            SmartVillagerData.setStatus(villager, "没有空地", "附近没有足够大的空地");
+            return;
+        }
+
+        BlockPos doorStand = findDoorStandPos(level, origin, blocks);
+
+        if (doorStand == null) {
+            SmartVillagerData.setStatus(villager, "无门口站位", "找不到门口施工点");
+            return;
+        }
+
+        savePos(villager, KEY_BUILD_X, KEY_BUILD_Y, KEY_BUILD_Z, origin);
+        savePos(villager, KEY_DOOR_X, KEY_DOOR_Y, KEY_DOOR_Z, doorStand);
+
+        setState(villager, STATE_FETCH_MATERIALS);
+    }
+
+    private static void tickFetchMaterials(net.minecraft.server.level.ServerLevel level, Villager villager) {
+        SimpleContainer inventory = villager.getInventory();
+
+        int oakLogs = SmartVillagerData.countItems(inventory, "minecraft:oak_log");
+        int cobblestone = SmartVillagerData.countItems(inventory, "minecraft:cobblestone");
+        int stone = SmartVillagerData.countItems(inventory, "minecraft:stone");
+
+        // 只要身上有一批基础材料，就可以先回门口继续施工。
+        // 建造时如果发现缺具体材料，会再次回来仓库取。
+        if (oakLogs >= TARGET_OAK_LOGS / 2
+                || cobblestone >= TARGET_COBBLESTONE / 2
+                || stone >= TARGET_COBBLESTONE / 2) {
+            setState(villager, STATE_MOVE_TO_DOOR);
+            return;
+        }
+
+        BlockPos warehouse = SmartVillagerData.getWarehouseCenter(villager);
+
+        SmartVillagerData.setStatus(villager, "仓库取材", "去小镇仓库拿木材和石材");
+
+        SmartVillagerData.setTargetPlace(villager, warehouse, "builder_fetch_materials");
+
+        boolean arrived = SmartVillagerData.moveToTargetPlace(
+                villager,
+                SmartVillagerData.PLACE_STORAGE,
+                SmartVillagerData.SPEED_NORMAL
+        );
+
+        if (!arrived) {
+            return;
+        }
+
+        int moved = SmartVillagerData.takeItemsFromWarehouse(
+                level,
+                villager,
+                warehouse,
+                List.of(
+                        // 木结构基础材料。
+                        new SmartVillagerData.ItemRequest("minecraft:oak_log", TARGET_OAK_LOGS),
+
+                        // 石结构基础材料。
+                        // 当前矿工主要产 cobblestone，所以建筑师优先拿圆石。
+                        new SmartVillagerData.ItemRequest("minecraft:cobblestone", TARGET_COBBLESTONE),
+
+                        // 如果仓库里以后有 stone，也可以拿。
+                        new SmartVillagerData.ItemRequest("minecraft:stone", TARGET_COBBLESTONE)
+                ),
+                SmartVillagerData.WAREHOUSE_RADIUS
+        );
+
+        if (moved > 0) {
+            setState(villager, STATE_MOVE_TO_DOOR);
+        } else {
+            SmartVillagerData.setStatus(villager, "仓库等料", "仓库暂时没有木材或石材");
         }
     }
 
-    private static String posText(BlockPos pos) {
-        return pos.getX() + "," + pos.getY() + "," + pos.getZ();
+    private static void tickMoveToDoor(net.minecraft.server.level.ServerLevel level, Villager villager) {
+        BlockPos doorStand = readPos(villager, KEY_DOOR_X, KEY_DOOR_Y, KEY_DOOR_Z);
+
+        if (doorStand == null) {
+            setState(villager, STATE_FIND_SITE);
+            return;
+        }
+
+        SmartVillagerData.setStatus(villager, "走向门口", "站到门口施工点");
+
+        SmartVillagerData.setTargetPlace(villager, doorStand, "builder_door_stand");
+
+        boolean arrived = SmartVillagerData.moveToTargetPlace(
+                villager,
+                SmartVillagerData.PLACE_WORK,
+                SmartVillagerData.SPEED_NORMAL
+        );
+
+        if (arrived) {
+            setState(villager, STATE_BUILD);
+        }
     }
 
-    private static net.minecraft.world.level.block.state.BlockState normalizeToWoodenHouse(
-            net.minecraft.world.level.block.state.BlockState originalState
+    private static void tickBuild(net.minecraft.server.level.ServerLevel level, Villager villager) {
+        BlockPos origin = readPos(villager, KEY_BUILD_X, KEY_BUILD_Y, KEY_BUILD_Z);
+        BlockPos doorStand = readPos(villager, KEY_DOOR_X, KEY_DOOR_Y, KEY_DOOR_Z);
+
+        if (origin == null || doorStand == null) {
+            setState(villager, STATE_FIND_SITE);
+            return;
+        }
+
+        double distance = villager.distanceToSqr(
+                doorStand.getX() + 0.5D,
+                doorStand.getY(),
+                doorStand.getZ() + 0.5D
+        );
+
+        if (distance > SmartVillagerData.PLACE_WORK) {
+            setState(villager, STATE_MOVE_TO_DOOR);
+            return;
+        }
+
+        List<StructureTemplate.StructureBlockInfo> blocks = loadTemplateBlocks(level, villager);
+
+        if (blocks.isEmpty()) {
+            setState(villager, STATE_FIND_SITE);
+            return;
+        }
+
+        SmartVillagerData.setStatus(villager, "施工中", "按蓝图建造橡木房屋");
+
+        int placed = 0;
+        boolean finished = true;
+
+        for (StructureTemplate.StructureBlockInfo blockInfo : blocks) {
+            BlockState required = normalizeToWoodenHouse(blockInfo.state());
+
+            if (required == null || required.isAir() || required.is(Blocks.STRUCTURE_VOID)) {
+                continue;
+            }
+
+            BlockPos targetPos = origin.offset(blockInfo.pos());
+            BlockState current = level.getBlockState(targetPos);
+
+            if (current.is(required.getBlock())) {
+                continue;
+            }
+
+            finished = false;
+
+            if (!SmartVillagerData.canPlaceBlockSafely(level, villager, targetPos)) {
+                // 目标点有人或不是空气时不放，等待后续 tick 再尝试。
+                continue;
+            }
+
+            Item requiredItem = required.getBlock().asItem();
+
+            if (requiredItem == Items.AIR) {
+                continue;
+            }
+
+            if (!consumeOneItem(villager.getInventory(), requiredItem)) {
+                // 先尝试用石材加工。
+                // 例如：圆石 -> 圆石楼梯 / 圆石台阶 / 圆石墙。
+                if (tryCraftFromCobblestone(villager, requiredItem)) {
+                    return;
+                }
+
+                // 再尝试用橡木原木加工。
+                // 例如：橡木原木 -> 木板 / 楼梯 / 台阶 / 栅栏门 / 活板门。
+                if (tryCraftFromOakLog(villager, requiredItem)) {
+                    return;
+                }
+
+                // 两种基础材料都没有，回仓库取。
+                setState(villager, STATE_FETCH_MATERIALS);
+                return;
+            }
+
+            if (level.setBlockAndUpdate(targetPos, required)) {
+                placed++;
+
+                villager.swing(InteractionHand.MAIN_HAND);
+
+                level.playSound(
+                        null,
+                        targetPos,
+                        SoundEvents.WOOD_PLACE,
+                        SoundSource.NEUTRAL,
+                        0.8F,
+                        1.0F
+                );
+            }
+
+            if (placed >= MAX_PLACE_PER_TICK) {
+                return;
+            }
+        }
+
+        if (finished) {
+            SmartVillagerData.setStatus(villager, "房屋完成", "寻找下一块建造空地");
+
+            clearPos(villager, KEY_BUILD_X, KEY_BUILD_Y, KEY_BUILD_Z);
+            clearPos(villager, KEY_DOOR_X, KEY_DOOR_Y, KEY_DOOR_Z);
+            SmartVillagerData.clearTargetPlace(villager);
+
+            setState(villager, STATE_FIND_SITE);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<StructureTemplate.StructureBlockInfo> loadTemplateBlocks(
+            net.minecraft.server.level.ServerLevel level,
+            Villager villager
     ) {
+        String blueprintName = villager.getPersistentData()
+                .getString(KEY_BLUEPRINT)
+                .orElse("minecraft:village/plains/houses/plains_small_house_1");
+
+        Identifier structureId = Identifier.parse(blueprintName);
+
+        java.util.Optional<StructureTemplate> optionalTemplate =
+                level.getServer().getStructureManager().get(structureId);
+
+        if (optionalTemplate.isEmpty()) {
+            return List.of();
+        }
+
+        try {
+            java.lang.reflect.Field palettesField = StructureTemplate.class.getDeclaredField("palettes");
+            palettesField.setAccessible(true);
+
+            List<StructureTemplate.Palette> palettes =
+                    (List<StructureTemplate.Palette>) palettesField.get(optionalTemplate.get());
+
+            if (!palettes.isEmpty()) {
+                return palettes.get(0).blocks();
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        return List.of();
+    }
+
+    private record BuildBounds(int minX, int maxX, int minY, int maxY, int minZ, int maxZ) {
+    }
+
+    private static BuildBounds calculateBounds(List<StructureTemplate.StructureBlockInfo> blocks) {
+        int minX = Integer.MAX_VALUE;
+        int minY = Integer.MAX_VALUE;
+        int minZ = Integer.MAX_VALUE;
+        int maxX = Integer.MIN_VALUE;
+        int maxY = Integer.MIN_VALUE;
+        int maxZ = Integer.MIN_VALUE;
+
+        for (StructureTemplate.StructureBlockInfo info : blocks) {
+            BlockState converted = normalizeToWoodenHouse(info.state());
+
+            if (converted == null || converted.isAir() || converted.is(Blocks.STRUCTURE_VOID)) {
+                continue;
+            }
+
+            BlockPos p = info.pos();
+
+            minX = Math.min(minX, p.getX());
+            minY = Math.min(minY, p.getY());
+            minZ = Math.min(minZ, p.getZ());
+            maxX = Math.max(maxX, p.getX());
+            maxY = Math.max(maxY, p.getY());
+            maxZ = Math.max(maxZ, p.getZ());
+        }
+
+        return new BuildBounds(minX, maxX, minY, maxY, minZ, maxZ);
+    }
+
+    private static BlockPos findBuildableSite(
+            net.minecraft.server.level.ServerLevel level,
+            Villager villager,
+            List<StructureTemplate.StructureBlockInfo> blocks,
+            BuildBounds bounds
+    ) {
+        BlockPos.MutableBlockPos candidate = new BlockPos.MutableBlockPos();
+
+        for (int r = 8; r <= SITE_SEARCH_RADIUS; r += 4) {
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    if (Math.abs(dx) != r && Math.abs(dz) != r) {
+                        continue;
+                    }
+
+                    candidate.set(
+                            villager.getBlockX() + dx,
+                            villager.getBlockY(),
+                            villager.getBlockZ() + dz
+                    );
+
+                    if (isBuildAreaClear(level, candidate, bounds)) {
+                        return candidate.immutable();
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static boolean isBuildAreaClear(
+            net.minecraft.server.level.ServerLevel level,
+            BlockPos origin,
+            BuildBounds bounds
+    ) {
+        for (int x = bounds.minX - SITE_MARGIN; x <= bounds.maxX + SITE_MARGIN; x++) {
+            for (int y = bounds.minY; y <= bounds.maxY + 2; y++) {
+                for (int z = bounds.minZ - SITE_MARGIN; z <= bounds.maxZ + SITE_MARGIN; z++) {
+                    if (!level.getBlockState(origin.offset(x, y, z)).isAir()) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return !level.getBlockState(origin.below()).isAir();
+    }
+
+    private static BlockPos findDoorStandPos(
+            net.minecraft.server.level.ServerLevel level,
+            BlockPos origin,
+            List<StructureTemplate.StructureBlockInfo> blocks
+    ) {
+        for (StructureTemplate.StructureBlockInfo info : blocks) {
+            BlockState state = info.state();
+
+            if (!(state.getBlock() instanceof DoorBlock)) {
+                continue;
+            }
+
+            if (state.hasProperty(DoorBlock.HALF)
+                    && state.getValue(DoorBlock.HALF) == DoubleBlockHalf.UPPER) {
+                continue;
+            }
+
+            Direction facing = Direction.SOUTH;
+
+            if (state.hasProperty(BlockStateProperties.HORIZONTAL_FACING)) {
+                facing = state.getValue(BlockStateProperties.HORIZONTAL_FACING);
+            }
+
+            BlockPos door = origin.offset(info.pos());
+
+            // 门外 2 格作为施工站位，避免建筑师站在门洞或墙体位置。
+            return door.relative(facing.getOpposite(), 2);
+        }
+
+        return origin.offset(0, 0, -3);
+    }
+
+    private static BlockState normalizeToWoodenHouse(BlockState originalState) {
         if (originalState.isAir()
-                || originalState.is(net.minecraft.world.level.block.Blocks.STRUCTURE_VOID)
-                || originalState.is(net.minecraft.world.level.block.Blocks.STRUCTURE_BLOCK)) {
+                || originalState.is(Blocks.STRUCTURE_VOID)
+                || originalState.is(Blocks.STRUCTURE_BLOCK)) {
             return null;
         }
 
-        String blockName = net.minecraft.core.registries.BuiltInRegistries.BLOCK
-                .getKey(originalState.getBlock())
-                .getPath();
+        String blockName = BuiltInRegistries.BLOCK.getKey(originalState.getBlock()).getPath();
 
-        // ================================
-        // 门是双格方块，当前阶段先转成单格栅栏门，避免下半门反复破坏/重建。
-        // 门的上半部分直接跳过。
-        // ================================
-        if (originalState.getBlock() instanceof net.minecraft.world.level.block.DoorBlock) {
-            net.minecraft.world.level.block.state.properties.DoubleBlockHalf half =
-                    originalState.getValue(net.minecraft.world.level.block.DoorBlock.HALF);
-
-            if (half == net.minecraft.world.level.block.state.properties.DoubleBlockHalf.UPPER) {
+        // 门是双格方块，当前阶段仍然转成单格橡木栅栏门。
+        // 上半部分跳过，避免重复建造。
+        if (originalState.getBlock() instanceof DoorBlock) {
+            if (originalState.hasProperty(DoorBlock.HALF)
+                    && originalState.getValue(DoorBlock.HALF) == DoubleBlockHalf.UPPER) {
                 return null;
             }
-            return copyCommonProperties(
-                    originalState,
-                    net.minecraft.world.level.block.Blocks.OAK_FENCE_GATE.defaultBlockState()
-            );
+
+            return copyCommonProperties(originalState, Blocks.OAK_FENCE_GATE.defaultBlockState());
         }
 
-        // ================================
-        // 1. 跳过当前木屋阶段不需要的东西
-        // ================================
+        // 暂时跳过复杂装饰和容器。
         if (blockName.contains("torch")
                 || blockName.contains("lantern")
                 || blockName.contains("candle")
@@ -288,63 +498,92 @@ public class BuilderHandler {
             return null;
         }
 
-        // ================================
-        // 2. 玻璃类 -> 木窗格
-        // 原版没有 oak_window，所以先用 oak_fence 当木窗。
-        // ================================
+        // 玻璃当前还没有熔炉工供应，先保留为橡木栅栏当木窗。
         if (blockName.contains("glass")
                 || blockName.contains("pane")
                 || blockName.contains("iron_bars")) {
-            return net.minecraft.world.level.block.Blocks.OAK_FENCE.defaultBlockState();
+            return Blocks.OAK_FENCE.defaultBlockState();
         }
 
-        // ================================
-        // 3. 楼梯、半砖、门、栅栏、活板门统一橡木化
-        // ================================
+        // =========================================================
+        // 石材类：不再转橡木，改成圆石体系。
+        // =========================================================
+
+        if (isStoneLikeBlockName(blockName)) {
+            if (blockName.endsWith("_stairs")) {
+                return copyCommonProperties(
+                        originalState,
+                        Blocks.COBBLESTONE_STAIRS.defaultBlockState()
+                );
+            }
+
+            if (blockName.endsWith("_slab")) {
+                return copyCommonProperties(
+                        originalState,
+                        Blocks.COBBLESTONE_SLAB.defaultBlockState()
+                );
+            }
+
+            if (blockName.endsWith("_wall")) {
+                return Blocks.COBBLESTONE_WALL.defaultBlockState();
+            }
+
+            return Blocks.COBBLESTONE.defaultBlockState();
+        }
+
+        // =========================================================
+        // 木材类：仍然统一成橡木体系。
+        // =========================================================
+
         if (blockName.endsWith("_stairs")) {
-            return copyCommonProperties(
-                    originalState,
-                    net.minecraft.world.level.block.Blocks.OAK_STAIRS.defaultBlockState()
-            );
+            return copyCommonProperties(originalState, Blocks.OAK_STAIRS.defaultBlockState());
         }
 
         if (blockName.endsWith("_slab")) {
-            return copyCommonProperties(
-                    originalState,
-                    net.minecraft.world.level.block.Blocks.OAK_SLAB.defaultBlockState()
-            );
+            return copyCommonProperties(originalState, Blocks.OAK_SLAB.defaultBlockState());
         }
-
 
         if (blockName.endsWith("_trapdoor")) {
-            return net.minecraft.world.level.block.Blocks.OAK_TRAPDOOR.defaultBlockState();
+            return copyCommonProperties(originalState, Blocks.OAK_TRAPDOOR.defaultBlockState());
         }
 
-        if (blockName.endsWith("_fence")
-                || blockName.endsWith("_wall")) {
-            return net.minecraft.world.level.block.Blocks.OAK_FENCE.defaultBlockState();
+        if (blockName.endsWith("_fence")) {
+            return Blocks.OAK_FENCE.defaultBlockState();
         }
 
         if (blockName.endsWith("_fence_gate")) {
-            return net.minecraft.world.level.block.Blocks.OAK_FENCE_GATE.defaultBlockState();
+            return copyCommonProperties(originalState, Blocks.OAK_FENCE_GATE.defaultBlockState());
         }
 
-        // ================================
-        // 4. 原木类统一成橡木原木
-        // ================================
-        if (blockName.endsWith("_log")
-                || blockName.endsWith("_wood")) {
-            return net.minecraft.world.level.block.Blocks.OAK_LOG.defaultBlockState();
+        if (blockName.endsWith("_log") || blockName.endsWith("_wood")) {
+            return copyCommonProperties(originalState, Blocks.OAK_LOG.defaultBlockState());
         }
 
         if (blockName.contains("stripped")) {
-            return net.minecraft.world.level.block.Blocks.STRIPPED_OAK_LOG.defaultBlockState();
+            return copyCommonProperties(originalState, Blocks.STRIPPED_OAK_LOG.defaultBlockState());
         }
 
-        // ================================
-        // 5. 石头 / 砖 / 混凝土 / 泥土类 -> 木板或去皮橡木
-        // ================================
-        if (blockName.contains("stone")
+        if (blockName.endsWith("_planks")) {
+            return Blocks.OAK_PLANKS.defaultBlockState();
+        }
+
+        // 当前阶段跳过叶子、地毯、羊毛。
+        if (blockName.contains("leaves")
+                || blockName.contains("carpet")
+                || blockName.contains("wool")) {
+            return null;
+        }
+
+        if (blockName.startsWith("oak_")) {
+            return originalState;
+        }
+
+        // 未知方块默认转成橡木木板，保证不会卡死建造流程。
+        return Blocks.OAK_PLANKS.defaultBlockState();
+    }
+
+    private static boolean isStoneLikeBlockName(String blockName) {
+        return blockName.contains("stone")
                 || blockName.contains("cobblestone")
                 || blockName.contains("brick")
                 || blockName.contains("deepslate")
@@ -357,399 +596,173 @@ public class BuilderHandler {
                 || blockName.contains("terracotta")
                 || blockName.contains("concrete")
                 || blockName.contains("mud")
-                || blockName.contains("clay")) {
-            return net.minecraft.world.level.block.Blocks.OAK_PLANKS.defaultBlockState();
-        }
-
-        // ================================
-        // 6. 普通木板类统一成橡木木板
-        // ================================
-        if (blockName.endsWith("_planks")) {
-            return net.minecraft.world.level.block.Blocks.OAK_PLANKS.defaultBlockState();
-        }
-
-        // ================================
-        // 7. 叶子、装饰、地毯等暂时跳过或木板化
-        // ================================
-        if (blockName.contains("leaves")
-                || blockName.contains("carpet")
-                || blockName.contains("wool")) {
-            return null;
-        }
-
-        // ================================
-        // 8. 如果本来就是橡木相关，就保留
-        // ================================
-        if (blockName.startsWith("oak_")) {
-            return originalState;
-        }
-
-        // ================================
-        // 9. 其他未知方块，当前木屋阶段先统一转木板
-        // ================================
-        return net.minecraft.world.level.block.Blocks.OAK_PLANKS.defaultBlockState();
+                || blockName.contains("clay");
     }
 
-    private static int getOakLogCraftYield(net.minecraft.world.item.Item requiredItem) {
-        String itemName = net.minecraft.core.registries.BuiltInRegistries.ITEM
-                .getKey(requiredItem)
-                .getPath();
+    private static BlockState copyCommonProperties(BlockState from, BlockState to) {
+        if (from.hasProperty(BlockStateProperties.HORIZONTAL_FACING)
+                && to.hasProperty(BlockStateProperties.HORIZONTAL_FACING)) {
+            to = to.setValue(BlockStateProperties.HORIZONTAL_FACING, from.getValue(BlockStateProperties.HORIZONTAL_FACING));
+        }
 
-        if (itemName.equals("oak_log")) {
+        if (from.hasProperty(BlockStateProperties.HALF)
+                && to.hasProperty(BlockStateProperties.HALF)) {
+            to = to.setValue(BlockStateProperties.HALF, from.getValue(BlockStateProperties.HALF));
+        }
+
+        if (from.hasProperty(BlockStateProperties.STAIRS_SHAPE)
+                && to.hasProperty(BlockStateProperties.STAIRS_SHAPE)) {
+            to = to.setValue(BlockStateProperties.STAIRS_SHAPE, from.getValue(BlockStateProperties.STAIRS_SHAPE));
+        }
+
+        if (from.hasProperty(BlockStateProperties.SLAB_TYPE)
+                && to.hasProperty(BlockStateProperties.SLAB_TYPE)) {
+            to = to.setValue(BlockStateProperties.SLAB_TYPE, from.getValue(BlockStateProperties.SLAB_TYPE));
+        }
+
+        if (from.hasProperty(BlockStateProperties.AXIS)
+                && to.hasProperty(BlockStateProperties.AXIS)) {
+            to = to.setValue(BlockStateProperties.AXIS, from.getValue(BlockStateProperties.AXIS));
+        }
+
+        if (from.hasProperty(BlockStateProperties.OPEN)
+                && to.hasProperty(BlockStateProperties.OPEN)) {
+            to = to.setValue(BlockStateProperties.OPEN, from.getValue(BlockStateProperties.OPEN));
+        }
+
+        return to;
+    }
+
+    private static boolean tryCraftFromOakLog(Villager villager, Item requiredItem) {
+        int yield = getOakLogCraftYield(requiredItem);
+
+        if (yield <= 0) {
+            return false;
+        }
+
+        if (!SmartVillagerData.consumeOne(villager.getInventory(), "minecraft:oak_log")) {
+            return false;
+        }
+
+        villager.getInventory().addItem(new ItemStack(requiredItem, yield));
+        villager.getInventory().setChanged();
+
+        SmartVillagerData.setStatus(villager, "加工木材", "用橡木原木合成建筑材料");
+
+        return true;
+    }
+
+    private static boolean tryCraftFromCobblestone(Villager villager, Item requiredItem) {
+        int yield = getCobblestoneCraftYield(requiredItem);
+
+        if (yield <= 0) {
+            return false;
+        }
+
+        // 先消耗圆石。
+        if (!SmartVillagerData.consumeOne(villager.getInventory(), "minecraft:cobblestone")) {
+            return false;
+        }
+
+        villager.getInventory().addItem(new ItemStack(requiredItem, yield));
+        villager.getInventory().setChanged();
+
+        SmartVillagerData.setStatus(villager, "加工石材", "用圆石加工建筑材料");
+
+        return true;
+    }
+
+    private static int getCobblestoneCraftYield(Item requiredItem) {
+        String itemName = BuiltInRegistries.ITEM.getKey(requiredItem).getPath();
+
+        // 圆石本体。
+        if (itemName.equals("cobblestone")) {
             return 1;
         }
 
-        if (itemName.equals("stripped_oak_log")) {
+        // 当前阶段的简化加工：
+        // 真实配方不是 1:1，但这里是智能建筑师的“脑内加工”。
+        // 后续如果要真实经济，可以改成按配方消耗多个圆石。
+        if (itemName.equals("cobblestone_stairs")) {
             return 1;
         }
 
-        if (itemName.equals("oak_planks")) {
-            return 4;
-        }
-
-        if (itemName.equals("oak_stairs")) {
-            return 4;
-        }
-
-        if (itemName.equals("oak_slab")) {
-            return 8;
-        }
-
-        if (itemName.equals("oak_door")) {
-            return 3;
-        }
-
-        if (itemName.equals("oak_fence")) {
-            return 3;
-        }
-
-        if (itemName.equals("oak_fence_gate")) {
-            return 1;
-        }
-
-        if (itemName.equals("oak_trapdoor")) {
+        if (itemName.equals("cobblestone_slab")) {
             return 2;
         }
 
-        if (itemName.equals("oak_button")) {
-            return 4;
+        if (itemName.equals("cobblestone_wall")) {
+            return 1;
         }
 
-        if (itemName.equals("oak_pressure_plate")) {
-            return 2;
+        // 如果你后面想让建筑师用圆石加工石砖，也可以在这里扩展。
+        if (itemName.equals("stone_bricks")) {
+            return 1;
         }
 
-        if (itemName.equals("oak_sign")) {
+        if (itemName.equals("stone_brick_stairs")) {
+            return 1;
+        }
+
+        if (itemName.equals("stone_brick_slab")) {
             return 2;
         }
 
         return 0;
     }
 
-    private static boolean consumeOneOakLog(
-            net.minecraft.server.level.ServerLevel serverLevel,
-            Villager villager,
-            net.minecraft.core.BlockPos center
-    ) {
-        net.minecraft.world.item.Item oakLogItem = net.minecraft.world.item.Items.OAK_LOG;
+    private static int getOakLogCraftYield(Item requiredItem) {
+        String itemName = BuiltInRegistries.ITEM.getKey(requiredItem).getPath();
 
-        // 1. 先找村民自己背包
-        net.minecraft.world.SimpleContainer inventory = villager.getInventory();
+        if (itemName.equals("oak_log")) return 1;
+        if (itemName.equals("stripped_oak_log")) return 1;
+        if (itemName.equals("oak_planks")) return 4;
+        if (itemName.equals("oak_stairs")) return 4;
+        if (itemName.equals("oak_slab")) return 8;
+        if (itemName.equals("oak_fence")) return 3;
+        if (itemName.equals("oak_fence_gate")) return 1;
+        if (itemName.equals("oak_trapdoor")) return 2;
+        if (itemName.equals("oak_button")) return 4;
+        if (itemName.equals("oak_pressure_plate")) return 2;
+        if (itemName.equals("oak_sign")) return 2;
 
-        for (int i = 0; i < inventory.getContainerSize(); i++) {
-            net.minecraft.world.item.ItemStack stack = inventory.getItem(i);
-
-            if (!stack.isEmpty() && stack.getItem() == oakLogItem) {
-                inventory.removeItem(i, 1);
-                inventory.setChanged();
-                return true;
-            }
-        }
-
-        // 2. 再找建筑中心附近箱子
-        int radius = 10;
-        net.minecraft.core.BlockPos.MutableBlockPos mutablePos =
-                new net.minecraft.core.BlockPos.MutableBlockPos();
-
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dy = -4; dy <= 4; dy++) {
-                for (int dz = -radius; dz <= radius; dz++) {
-                    mutablePos.set(
-                            center.getX() + dx,
-                            center.getY() + dy,
-                            center.getZ() + dz
-                    );
-
-                    net.minecraft.world.level.block.entity.BlockEntity be =
-                            serverLevel.getBlockEntity(mutablePos);
-
-                    if (be instanceof net.minecraft.world.Container chest) {
-                        for (int i = 0; i < chest.getContainerSize(); i++) {
-                            net.minecraft.world.item.ItemStack stack = chest.getItem(i);
-
-                            if (!stack.isEmpty() && stack.getItem() == oakLogItem) {
-                                chest.removeItem(i, 1);
-                                chest.setChanged();
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        return false;
+        return 0;
     }
 
-    private static boolean tryCraftFromOakLog(
-            net.minecraft.server.level.ServerLevel serverLevel,
-            Villager villager,
-            net.minecraft.core.BlockPos center,
-            net.minecraft.world.item.Item requiredItem
-    ) {
-        int yieldCount = getOakLogCraftYield(requiredItem);
+    private static boolean consumeOneItem(SimpleContainer inventory, Item item) {
+        String itemName = BuiltInRegistries.ITEM.getKey(item).toString();
+        return SmartVillagerData.consumeOne(inventory, itemName);
+    }
 
-        if (yieldCount <= 0) {
-            return false;
+    private static String getState(Villager villager) {
+        return villager.getPersistentData().getString(KEY_STATE).orElse(STATE_FIND_SITE);
+    }
+
+    private static void setState(Villager villager, String state) {
+        villager.getPersistentData().putString(KEY_STATE, state);
+    }
+
+    private static void savePos(Villager villager, String keyX, String keyY, String keyZ, BlockPos pos) {
+        villager.getPersistentData().putInt(keyX, pos.getX());
+        villager.getPersistentData().putInt(keyY, pos.getY());
+        villager.getPersistentData().putInt(keyZ, pos.getZ());
+    }
+
+    private static BlockPos readPos(Villager villager, String keyX, String keyY, String keyZ) {
+        if (!villager.getPersistentData().contains(keyX)) {
+            return null;
         }
 
-        boolean consumed = consumeOneOakLog(serverLevel, villager, center);
-
-        if (!consumed) {
-            return false;
-        }
-
-        net.minecraft.world.SimpleContainer inventory = villager.getInventory();
-
-        inventory.addItem(new net.minecraft.world.item.ItemStack(requiredItem, yieldCount));
-        inventory.setChanged();
-
-        villager.level().playSound(
-                null,
-                villager.blockPosition(),
-                net.minecraft.sounds.SoundEvents.VILLAGER_WORK_CARTOGRAPHER,
-                net.minecraft.sounds.SoundSource.NEUTRAL,
-                0.8F,
-                1.2F
+        return new BlockPos(
+                villager.getPersistentData().getInt(keyX).orElse(0),
+                villager.getPersistentData().getInt(keyY).orElse(0),
+                villager.getPersistentData().getInt(keyZ).orElse(0)
         );
-
-        return true;
     }
 
-    private static net.minecraft.world.level.block.state.BlockState copyCommonProperties(
-            net.minecraft.world.level.block.state.BlockState from,
-            net.minecraft.world.level.block.state.BlockState to
-    ) {
-        // 楼梯、门、栅栏门、活板门常用：朝向
-        if (from.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING)
-                && to.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING)) {
-            to = to.setValue(
-                    net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING,
-                    from.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING)
-            );
-        }
-
-        // 楼梯：上半 / 下半
-        if (from.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.HALF)
-                && to.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.HALF)) {
-            to = to.setValue(
-                    net.minecraft.world.level.block.state.properties.BlockStateProperties.HALF,
-                    from.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.HALF)
-            );
-        }
-
-        // 楼梯：直线 / 内角 / 外角
-        if (from.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.STAIRS_SHAPE)
-                && to.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.STAIRS_SHAPE)) {
-            to = to.setValue(
-                    net.minecraft.world.level.block.state.properties.BlockStateProperties.STAIRS_SHAPE,
-                    from.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.STAIRS_SHAPE)
-            );
-        }
-
-        // 半砖：上半砖 / 下半砖 / 双层
-        if (from.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.SLAB_TYPE)
-                && to.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.SLAB_TYPE)) {
-            to = to.setValue(
-                    net.minecraft.world.level.block.state.properties.BlockStateProperties.SLAB_TYPE,
-                    from.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.SLAB_TYPE)
-            );
-        }
-
-        // 原木：轴向
-        if (from.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.AXIS)
-                && to.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.AXIS)) {
-            to = to.setValue(
-                    net.minecraft.world.level.block.state.properties.BlockStateProperties.AXIS,
-                    from.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.AXIS)
-            );
-        }
-
-        // 栅栏门 / 活板门：开关状态
-        if (from.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.OPEN)
-                && to.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.OPEN)) {
-            to = to.setValue(
-                    net.minecraft.world.level.block.state.properties.BlockStateProperties.OPEN,
-                    from.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.OPEN)
-            );
-        }
-
-        return to;
-    }
-
-
-    private static void restockBuilderBackpack(Villager villager) {
-        if (!(villager.level() instanceof net.minecraft.server.level.ServerLevel serverLevel)) {
-            return;
-        }
-
-        net.minecraft.world.SimpleContainer inventory = villager.getInventory();
-        net.minecraft.world.item.Item oakLogItem = net.minecraft.world.item.Items.OAK_LOG;
-
-        int currentOakLogs = countItem(inventory, oakLogItem);
-        int emptySlots = countEmptySlots(inventory);
-
-        // 目标：建筑工身上尽量保持 32 个橡木原木。
-        // 不要塞满，给合成出来的楼梯、半砖、栅栏留空间。
-        int targetOakLogs = 32;
-
-        if (currentOakLogs >= targetOakLogs) {
-            return;
-        }
-
-        if (emptySlots <= 0) {
-            SmartVillagerData.setDisplayStatus(villager, "§c", "背包满", "建筑工");
-            return;
-        }
-
-        int need = targetOakLogs - currentOakLogs;
-
-        net.minecraft.core.BlockPos center = getBuilderSupplyCenter(villager);
-
-        boolean movedAny = false;
-
-        int radius = 12;
-        net.minecraft.core.BlockPos.MutableBlockPos mutablePos =
-                new net.minecraft.core.BlockPos.MutableBlockPos();
-
-        searchChest:
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dy = -4; dy <= 4; dy++) {
-                for (int dz = -radius; dz <= radius; dz++) {
-                    mutablePos.set(
-                            center.getX() + dx,
-                            center.getY() + dy,
-                            center.getZ() + dz
-                    );
-
-                    net.minecraft.world.level.block.entity.BlockEntity be =
-                            serverLevel.getBlockEntity(mutablePos);
-
-                    if (be instanceof net.minecraft.world.Container chest) {
-                        for (int i = 0; i < chest.getContainerSize(); i++) {
-                            net.minecraft.world.item.ItemStack chestStack = chest.getItem(i);
-
-                            if (chestStack.isEmpty()) {
-                                continue;
-                            }
-
-                            if (chestStack.getItem() != oakLogItem) {
-                                continue;
-                            }
-
-                            int toMove = Math.min(need, chestStack.getCount());
-
-                            net.minecraft.world.item.ItemStack moving =
-                                    new net.minecraft.world.item.ItemStack(oakLogItem, toMove);
-
-                            net.minecraft.world.item.ItemStack remaining =
-                                    inventory.addItem(moving);
-
-                            int moved = toMove - remaining.getCount();
-
-                            if (moved > 0) {
-                                chestStack.shrink(moved);
-                                chest.setChanged();
-                                inventory.setChanged();
-
-                                need -= moved;
-                                movedAny = true;
-
-                                SmartVillagerData.setDisplayStatus(villager, "§b", "补充材料", "建筑工");
-
-                                villager.level().playSound(
-                                        null,
-                                        villager.blockPosition(),
-                                        net.minecraft.sounds.SoundEvents.ITEM_PICKUP,
-                                        net.minecraft.sounds.SoundSource.NEUTRAL,
-                                        0.3F,
-                                        1.4F
-                                );
-                            }
-
-                            if (need <= 0) {
-                                break searchChest;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (!movedAny && currentOakLogs <= 0) {
-            SmartVillagerData.setDisplayStatus(villager, "§6", "等待木材", "建筑工");
-
-            // 不要频繁刷屏，偶尔提示即可
-            if (SmartVillagerData.shouldThink(villager, 120)) {
-                net.minecraft.world.entity.player.Player nearestPlayer =
-                        villager.level().getNearestPlayer(villager, 12.0D);
-
-                if (nearestPlayer != null) {
-                    nearestPlayer.sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                            "§e[" + SmartVillagerData.getCitizenName(villager)
-                                    + "] 正在等待仓库补充橡木原木。"
-                    ));
-                }
-            }
-        }
-    }
-
-    private static int countItem(
-            net.minecraft.world.SimpleContainer inventory,
-            net.minecraft.world.item.Item item
-    ) {
-        int count = 0;
-
-        for (int i = 0; i < inventory.getContainerSize(); i++) {
-            net.minecraft.world.item.ItemStack stack = inventory.getItem(i);
-
-            if (!stack.isEmpty() && stack.getItem() == item) {
-                count += stack.getCount();
-            }
-        }
-
-        return count;
-    }
-    private static int countEmptySlots(net.minecraft.world.SimpleContainer inventory) {
-        int count = 0;
-
-        for (int i = 0; i < inventory.getContainerSize(); i++) {
-            if (inventory.getItem(i).isEmpty()) {
-                count++;
-            }
-        }
-
-        return count;
-    }
-    private static net.minecraft.core.BlockPos getBuilderSupplyCenter(Villager villager) {
-        if (villager.getPersistentData().contains("BuildCenterX")) {
-            int x = villager.getPersistentData().getInt("BuildCenterX").orElse(villager.getBlockX());
-            int y = villager.getPersistentData().getInt("BuildCenterY").orElse(villager.getBlockY());
-            int z = villager.getPersistentData().getInt("BuildCenterZ").orElse(villager.getBlockZ());
-
-            return new net.minecraft.core.BlockPos(x, y, z);
-        }
-
-        return villager.blockPosition();
+    private static void clearPos(Villager villager, String keyX, String keyY, String keyZ) {
+        villager.getPersistentData().remove(keyX);
+        villager.getPersistentData().remove(keyY);
+        villager.getPersistentData().remove(keyZ);
     }
 }

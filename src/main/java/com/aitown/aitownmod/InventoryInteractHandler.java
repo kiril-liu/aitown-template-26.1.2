@@ -77,16 +77,6 @@ public class InventoryInteractHandler {
                 super.setChanged();
                 syncToVillager();
             }
-
-            public void stopOpen(net.minecraft.world.entity.player.Player player) {
-                syncToVillager();
-
-                ItemStack extra = this.getItem(8);
-                if (!extra.isEmpty()) {
-                    player.getInventory().placeItemBackInInventory(extra.copy());
-                    this.setItem(8, ItemStack.EMPTY);
-                }
-            }
         };
 
         // 把村民真实背包复制到显示容器

@@ -9,5 +9,6 @@
   "aitown.configuration.items": "Item List",
   "aitown.configuration.logDirtBlock": "Log Dirt Block",
   "aitown.configuration.magicNumberIntroduction": "Magic Number Text",
+  "item.aitown.town_system_chip": "Town System Chip",
   "aitown.configuration.magicNumber": "Magic Number"
 }
