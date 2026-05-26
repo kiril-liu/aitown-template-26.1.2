@@ -29,36 +29,23 @@ public class BuilderChipItem extends Item {
 
             if (villager.getPersistentData().contains("IsBuilding")) {
                 if (playerIn.isShiftKeyDown()) {
-                    //villager.setCustomName(Component.literal("§e[施工中] 智能建筑工"));
                     SmartVillagerData.setDisplayStatus(villager, "§e", "施工中", "建筑工");
                     villager.getPersistentData().putBoolean("IsBuilding", true);
                     villager.getPersistentData().putString("BlueprintName", chosenBlueprint);
                     villager.getPersistentData().putInt("BuildCenterX", villager.getBlockX());
                     villager.getPersistentData().putInt("BuildCenterY", villager.getBlockY());
                     villager.getPersistentData().putInt("BuildCenterZ", villager.getBlockZ());
-                    //playerIn.sendSystemMessage(Component.literal("§a[系统] 强行注入新芯片！抽中图纸(" + chosenBlueprint + ")！马上开工！"));
                     playerIn.sendSystemMessage(Component.literal(
                             "§a[系统] " + SmartVillagerData.getCitizenName(villager)
                                     + " 已重新开工！抽中图纸(" + chosenBlueprint + ")！"
                     ));
                     if (!playerIn.isCreative()) stack.shrink(1);
                     return InteractionResult.SUCCESS;
-                } else {
-                    // 【情况 B】直接右键 = 打开可视化 GUI 背包！
-//                        if (playerIn instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
-//                            serverPlayer.openMenu(
-//                                    new VillagerInventoryMenuProvider(villager),
-//                                    buf -> buf.writeInt(villager.getId())
-//                            );
-//                        }
-                        return InteractionResult.SUCCESS;
                 }
             }
 
             // 【职业切换】如果是普通村民，或者从伐木工转行过来
             SmartVillagerData.setDisplayStatus(villager, "§e", "施工中", "建筑工");
-            //villager.setCustomName(Component.literal("§e[施工中] 智能建筑工"));
-            //villager.setCustomNameVisible(true);
 
             villager.getPersistentData().remove("IsLumberjack"); // 洗掉伐木工记忆
             villager.getPersistentData().putBoolean("IsBuilding", true);

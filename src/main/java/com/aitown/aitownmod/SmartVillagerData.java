@@ -2,9 +2,14 @@ package com.aitown.aitownmod;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.SimpleContainer;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.npc.villager.Villager;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.phys.AABB;
 
 /**
  * v0.2.1 智能村民身份与节流核心。
@@ -58,6 +63,15 @@ public class SmartVillagerData {
             "灰灰", "阿桥", "木芽", "圆石", "小栗", "白桦", "土豆", "南瓜",
             "晨星", "暮雨", "云杉", "红砖", "苔苔", "竹叶", "小溪", "炭炭"
     };
+
+    public enum DepositResult {
+        SUCCESS,
+        NOT_NEEDED,
+        MOVING_TO_STORAGE,
+        NO_CHEST,
+        CHEST_FULL,
+        NOTHING_TO_DEPOSIT
+    }
 
     /**
      * 第一次成为智能村民时，给它一个永久名字和短 ID。
@@ -401,4 +415,289 @@ public class SmartVillagerData {
         return true;
     }
 
+    public static void setIdleAt(Villager villager, String role, BlockPos idlePos) {
+        villager.getPersistentData().putBoolean("IsIdle", true);
+        villager.getPersistentData().putInt("IdleX", idlePos.getX());
+        villager.getPersistentData().putInt("IdleY", idlePos.getY());
+        villager.getPersistentData().putInt("IdleZ", idlePos.getZ());
+
+        setTargetPlace(villager, idlePos, "idle_anchor");
+        setDisplayStatus(villager, "§7", "闲置", role);
+    }
+
+    public static boolean isIdle(Villager villager) {
+        return villager.getPersistentData().getBoolean("IsIdle").orElse(false);
+    }
+
+    public static void wakeUp(Villager villager) {
+        villager.getPersistentData().putBoolean("IsIdle", false);
+    }
+
+    public static BlockPos getIdlePos(Villager villager) {
+        int x = villager.getPersistentData().getInt("IdleX").orElse(villager.getBlockX());
+        int y = villager.getPersistentData().getInt("IdleY").orElse(villager.getBlockY());
+        int z = villager.getPersistentData().getInt("IdleZ").orElse(villager.getBlockZ());
+
+        return new BlockPos(x, y, z);
+    }
+    public static int countEmptySlots(SimpleContainer inventory) {
+        int count = 0;
+
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            if (inventory.getItem(i).isEmpty()) {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    public static int countMatchingItems(
+            SimpleContainer inventory,
+            java.util.function.Predicate<ItemStack> matcher
+    ) {
+        int count = 0;
+
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
+
+            if (!stack.isEmpty() && matcher.test(stack)) {
+                count += stack.getCount();
+            }
+        }
+
+        return count;
+    }
+
+    public static boolean isInventoryFull(SimpleContainer inventory) {
+        return countEmptySlots(inventory) <= 0;
+    }
+    public static boolean pickupNearbyItems(
+            Villager villager,
+            double horizontalRadius,
+            double verticalRadius,
+            java.util.function.Predicate<ItemStack> matcher
+    ) {
+        boolean pickedAny = false;
+
+        AABB searchBox = villager.getBoundingBox().inflate(
+                horizontalRadius,
+                verticalRadius,
+                horizontalRadius
+        );
+
+        SimpleContainer inventory = villager.getInventory();
+
+        for (ItemEntity itemEntity : villager.level().getEntitiesOfClass(ItemEntity.class, searchBox)) {
+            ItemStack stack = itemEntity.getItem();
+
+            if (!matcher.test(stack)) {
+                continue;
+            }
+
+            int beforeCount = stack.getCount();
+            ItemStack remaining = inventory.addItem(stack);
+
+            if (remaining.getCount() < beforeCount) {
+                itemEntity.setItem(remaining);
+                pickedAny = true;
+
+                villager.level().playSound(
+                        null,
+                        villager.blockPosition(),
+                        SoundEvents.ITEM_PICKUP,
+                        SoundSource.NEUTRAL,
+                        0.2F,
+                        1.5F
+                );
+            }
+        }
+
+        return pickedAny;
+    }
+
+    public static DepositResult depositInventoryToNearbyChest(
+            net.minecraft.server.level.ServerLevel level,
+            Villager villager,
+            BlockPos storageCenter,
+            int radius,
+            java.util.function.Predicate<ItemStack> shouldDeposit
+    ) {
+        SimpleContainer inventory = villager.getInventory();
+
+        boolean hasItemToDeposit = false;
+
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
+
+            if (!stack.isEmpty() && shouldDeposit.test(stack)) {
+                hasItemToDeposit = true;
+                break;
+            }
+        }
+
+        if (!hasItemToDeposit) {
+            return DepositResult.NOTHING_TO_DEPOSIT;
+        }
+
+        boolean foundChest = false;
+        boolean deposited = false;
+
+        BlockPos.MutableBlockPos mPos = new BlockPos.MutableBlockPos();
+
+        searchChest:
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = -2; dy <= 2; dy++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    mPos.set(
+                            storageCenter.getX() + dx,
+                            storageCenter.getY() + dy,
+                            storageCenter.getZ() + dz
+                    );
+
+                    if (level.getBlockEntity(mPos) instanceof net.minecraft.world.Container chest) {
+                        foundChest = true;
+
+                        for (int i = 0; i < inventory.getContainerSize(); i++) {
+                            ItemStack slotItem = inventory.getItem(i);
+
+                            if (slotItem.isEmpty() || !shouldDeposit.test(slotItem)) {
+                                continue;
+                            }
+
+                            for (int c = 0; c < chest.getContainerSize(); c++) {
+                                ItemStack chestSlot = chest.getItem(c);
+
+                                boolean canInsert =
+                                        chestSlot.isEmpty()
+                                                || (
+                                                chestSlot.getItem() == slotItem.getItem()
+                                                        && chestSlot.getCount() + slotItem.getCount() <= chestSlot.getMaxStackSize()
+                                        );
+
+                                if (!canInsert) {
+                                    continue;
+                                }
+
+                                if (chestSlot.isEmpty()) {
+                                    chest.setItem(c, slotItem.copy());
+                                } else {
+                                    chestSlot.grow(slotItem.getCount());
+                                }
+
+                                inventory.setItem(i, ItemStack.EMPTY);
+                                chest.setChanged();
+                                inventory.setChanged();
+
+                                deposited = true;
+                                break searchChest;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (deposited) {
+            villager.level().playSound(
+                    null,
+                    villager.blockPosition(),
+                    SoundEvents.WOOD_PLACE,
+                    SoundSource.NEUTRAL,
+                    1.0F,
+                    1.0F
+            );
+
+            return DepositResult.SUCCESS;
+        }
+
+        if (!foundChest) {
+            return DepositResult.NO_CHEST;
+        }
+
+        return DepositResult.CHEST_FULL;
+    }
+    public static boolean handleDepositIfNeeded(
+            net.minecraft.server.level.ServerLevel level,
+            Villager villager,
+            String role,
+            BlockPos storageCenter,
+            int minItemsBeforeDeposit,
+            java.util.function.Predicate<ItemStack> shouldDeposit
+    ) {
+        SimpleContainer inventory = villager.getInventory();
+
+        int itemCount = countMatchingItems(inventory, shouldDeposit);
+        boolean inventoryFull = isInventoryFull(inventory);
+
+        if (itemCount < minItemsBeforeDeposit && !inventoryFull) {
+            return false;
+        }
+
+        setDisplayStatus(villager, "§b", "回家存货", role);
+        setTargetPlace(villager, storageCenter, "deposit_home");
+
+        boolean closeToStorage = moveToTargetPlace(
+                villager,
+                REACH_HOME,
+                SPEED_NORMAL
+        );
+
+        if (!closeToStorage) {
+            return true;
+        }
+
+        villager.getNavigation().stop();
+
+        DepositResult result = depositInventoryToNearbyChest(
+                level,
+                villager,
+                storageCenter,
+                5,
+                shouldDeposit
+        );
+
+        if (result == DepositResult.SUCCESS || result == DepositResult.NOTHING_TO_DEPOSIT) {
+            clearTargetPlace(villager);
+            return true;
+        }
+
+        handleDepositProblem(villager, role, result, storageCenter);
+
+        return true;
+    }
+
+    public static void handleDepositProblem(
+            Villager villager,
+            String role,
+            DepositResult result,
+            BlockPos idlePos
+    ) {
+        Player nearestPlayer = villager.level().getNearestPlayer(villager, 12.0D);
+
+        if (result == DepositResult.NO_CHEST) {
+            setDisplayStatus(villager, "§c", "无箱子", role);
+
+            if (nearestPlayer != null && shouldThink(villager, 120)) {
+                nearestPlayer.sendSystemMessage(Component.literal(
+                        "§c[" + getCitizenName(villager) + "] 找不到可以存货的箱子。"
+                ));
+            }
+
+            setIdleAt(villager, role, idlePos);
+            return;
+        }
+
+        if (result == DepositResult.CHEST_FULL) {
+            setDisplayStatus(villager, "§c", "箱子满", role);
+
+            if (nearestPlayer != null && shouldThink(villager, 120)) {
+                nearestPlayer.sendSystemMessage(Component.literal(
+                        "§c[" + getCitizenName(villager) + "] 附近箱子已经满了。"
+                ));
+            }
+
+            setIdleAt(villager, role, idlePos);
+        }
+    }
 }
