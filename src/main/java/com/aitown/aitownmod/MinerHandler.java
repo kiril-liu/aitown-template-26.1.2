@@ -20,17 +20,11 @@ import java.util.List;
  * 矿工 / 采石工 v1。
  *
  * 当前目标：
- * 1. 只采集小镇中心高度或以上的石头，不向地下开采。
- * 2. 只采集看起来像自然岩体的石头。
- * 3. 如果目标石头附近有人造建筑方块，就不采，避免拆建筑师刚建好的房子。
- * 4. 破坏石头后用掉落物公共接口捡取圆石等产物。
+ * 1. 只采集小镇中心高度或以上的石头，不主动向地下开采。
+ * 2. 扩大可采集石头范围，让矿工稳定产出石材和煤炭。
+ * 3. 只用“附近是否有人造方块”来保护建筑师和玩家建筑。
+ * 4. 破坏石头后用 SmartVillagerData 的公共掉落物接口捡取产物。
  * 5. 采集到 10 个左右后送回小镇仓库。
- *
- * 当前不做：
- * - 不下矿洞。
- * - 不处理岩浆、水、深坑。
- * - 不处理工具耐久。
- * - 不处理铁矿、煤矿等矿石。
  */
 @EventBusSubscriber(modid = aitown.MODID)
 public class MinerHandler {
@@ -51,16 +45,13 @@ public class MinerHandler {
     private static final String KEY_WORK_Y = "MinerWorkY";
     private static final String KEY_WORK_Z = "MinerWorkZ";
 
-    // 搜索半径先不要太大，方便观察和调试。
+    // 搜索半径保持中等，避免每次扫描过大导致卡顿。
     private static final int STONE_SEARCH_RADIUS = 28;
 
-    // 采集到 10 个就回仓库，方便你观察矿工状态切换。
+    // 采集到 10 个就回仓库，方便观察矿工状态切换。
     private static final int DEPOSIT_THRESHOLD = 10;
 
-    // 目标石头周围 3x3x3 内至少有这么多个自然石头，才认为它属于自然岩体。
-    private static final int MIN_NATURAL_STONE_CLUSTER = 8;
-
-    // 目标石头附近这个半径内如果出现人造方块，就不采。
+    // 目标石头附近这个半径内如果出现人造方块，就认为它可能属于建筑区域，不采。
     private static final int ARTIFICIAL_BLOCK_CHECK_RADIUS = 3;
 
     @SubscribeEvent
@@ -140,7 +131,7 @@ public class MinerHandler {
             net.minecraft.server.level.ServerLevel level,
             Villager villager
     ) {
-        SmartVillagerData.setStatus(villager, "寻找石头", "寻找可采集的自然岩体");
+        SmartVillagerData.setStatus(villager, "寻找石头", "寻找可采集的地表石材");
 
         if (shouldDeposit(villager)) {
             setState(villager, STATE_DEPOSIT_ITEMS);
@@ -179,8 +170,7 @@ public class MinerHandler {
             return;
         }
 
-        // 走过去的过程中，目标可能已经被玩家或别的矿工破坏，
-        // 或者附近出现人造方块，所以每次移动前都重新验证。
+        // 走过去的过程中，目标可能已经被玩家、建筑师或其它矿工改变，所以移动前重新验证。
         if (!isValidMineTarget(level, villager, stonePos)) {
             clearMiningTarget(villager);
             setState(villager, STATE_SEEK_STONE);
@@ -213,11 +203,7 @@ public class MinerHandler {
             return;
         }
 
-        // 开采前最后一次确认：
-        // 1. 它还是石头；
-        // 2. 它不在地下；
-        // 3. 它附近不像建筑物；
-        // 4. 它仍然像自然岩体。
+        // 开采前最后一次确认，避免拆到建筑师刚放下的建筑材料。
         if (!isValidMineTarget(level, villager, stonePos)) {
             clearMiningTarget(villager);
             setState(villager, STATE_SEEK_STONE);
@@ -227,7 +213,7 @@ public class MinerHandler {
         SmartVillagerData.setStatus(villager, "采集中", "破坏石头并生成掉落物");
 
         // true = 生成原版掉落物。
-        // stone 通常会掉 cobblestone。
+        // stone 通常会掉 cobblestone，coal_ore 通常会掉 coal。
         boolean destroyed = level.destroyBlock(stonePos, true);
 
         if (destroyed) {
@@ -303,7 +289,12 @@ public class MinerHandler {
                         new SmartVillagerData.ItemRequest("minecraft:stone", 999),
                         new SmartVillagerData.ItemRequest("minecraft:andesite", 999),
                         new SmartVillagerData.ItemRequest("minecraft:diorite", 999),
-                        new SmartVillagerData.ItemRequest("minecraft:granite", 999)
+                        new SmartVillagerData.ItemRequest("minecraft:granite", 999),
+                        new SmartVillagerData.ItemRequest("minecraft:tuff", 999),
+                        new SmartVillagerData.ItemRequest("minecraft:calcite", 999),
+                        new SmartVillagerData.ItemRequest("minecraft:cobbled_deepslate", 999),
+                        new SmartVillagerData.ItemRequest("minecraft:deepslate", 999),
+                        new SmartVillagerData.ItemRequest("minecraft:coal", 999)
                 ),
                 SmartVillagerData.WAREHOUSE_RADIUS
         );
@@ -315,7 +306,7 @@ public class MinerHandler {
             net.minecraft.server.level.ServerLevel level,
             Villager villager
     ) {
-        SmartVillagerData.setStatus(villager, "等待采石", "附近没有安全的自然石头");
+        SmartVillagerData.setStatus(villager, "等待采石", "附近没有可采集石头");
 
         if (!SmartVillagerData.shouldThink(villager, 40)) {
             return;
@@ -355,7 +346,7 @@ public class MinerHandler {
                             villager.getBlockZ() + dz
                     );
 
-                    // 不采小镇中心高度以下的石头，避免向地下挖。
+                    // 只采小镇中心高度或以上的石头，避免矿工主动向地下挖。
                     if (mPos.getY() < minMineY) {
                         continue;
                     }
@@ -384,15 +375,13 @@ public class MinerHandler {
     }
 
     /**
-     * 判断一个石头是否适合被矿工采集。
+     * 判断一个方块是否适合被矿工采集。
      *
-     * 核心安全规则：
-     * 1. 只采 stone / cobblestone / andesite / diorite / granite。
-     * 2. 不采小镇中心高度以下的石头。
-     * 3. 必须暴露在空气旁边，避免扫描地下石头。
-     * 4. 附近必须像自然岩体。
-     * 5. 附近不能有人造建筑方块，避免拆建筑师或玩家建筑。
-     * 6. 不能采自己脚下或身体位置附近的关键方块。
+     * 当前简化规则：
+     * 1. 它必须是矿工允许采集的石材或煤矿。
+     * 2. 它必须位于小镇中心高度或以上。
+     * 3. 它不能是矿工脚下或身体位置的关键方块。
+     * 4. 它附近不能有明显人造方块，避免拆建筑师或玩家建筑。
      */
     private static boolean isValidMineTarget(
             net.minecraft.server.level.ServerLevel level,
@@ -420,14 +409,7 @@ public class MinerHandler {
             return false;
         }
 
-        if (!isStoneExposedToAir(level, pos)) {
-            return false;
-        }
-
-        if (countNaturalStoneAround(level, pos, 1) < MIN_NATURAL_STONE_CLUSTER) {
-            return false;
-        }
-
+        // 附近有人造建筑方块时，认为这是建筑区域或玩家建筑，不采。
         if (hasNearbyArtificialBlocks(level, pos, ARTIFICIAL_BLOCK_CHECK_RADIUS)) {
             return false;
         }
@@ -440,66 +422,13 @@ public class MinerHandler {
                 || state.is(Blocks.COBBLESTONE)
                 || state.is(Blocks.ANDESITE)
                 || state.is(Blocks.DIORITE)
-                || state.is(Blocks.GRANITE);
-    }
-
-    private static boolean isNaturalStone(BlockState state) {
-        return state.is(Blocks.STONE)
-                || state.is(Blocks.COBBLESTONE)
-                || state.is(Blocks.ANDESITE)
-                || state.is(Blocks.DIORITE)
                 || state.is(Blocks.GRANITE)
-                || state.is(Blocks.TUFF);
-    }
-
-    /**
-     * 判断石头是否暴露在空气旁边。
-     *
-     * 这样矿工不会去采完全埋在地下的石头。
-     */
-    private static boolean isStoneExposedToAir(
-            net.minecraft.server.level.ServerLevel level,
-            BlockPos pos
-    ) {
-        if (level.getBlockState(pos.above()).isAir()) {
-            return true;
-        }
-
-        for (Direction direction : Direction.Plane.HORIZONTAL) {
-            if (level.getBlockState(pos.relative(direction)).isAir()) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static int countNaturalStoneAround(
-            net.minecraft.server.level.ServerLevel level,
-            BlockPos center,
-            int radius
-    ) {
-        int count = 0;
-
-        BlockPos.MutableBlockPos mPos = new BlockPos.MutableBlockPos();
-
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dy = -radius; dy <= radius; dy++) {
-                for (int dz = -radius; dz <= radius; dz++) {
-                    mPos.set(
-                            center.getX() + dx,
-                            center.getY() + dy,
-                            center.getZ() + dz
-                    );
-
-                    if (isNaturalStone(level.getBlockState(mPos))) {
-                        count++;
-                    }
-                }
-            }
-        }
-
-        return count;
+                || state.is(Blocks.TUFF)
+                || state.is(Blocks.CALCITE)
+                || state.is(Blocks.DEEPSLATE)
+                || state.is(Blocks.COBBLED_DEEPSLATE)
+                || state.is(Blocks.COAL_ORE)
+                || state.is(Blocks.DEEPSLATE_COAL_ORE);
     }
 
     /**
@@ -509,7 +438,7 @@ public class MinerHandler {
      * - 建筑师刚建的房子；
      * - 玩家建筑；
      * - 仓库周围结构；
-     * - 木制道路、箱子、门、玻璃等。
+     * - 木制道路、箱子、门、玻璃、火把等。
      */
     private static boolean hasNearbyArtificialBlocks(
             net.minecraft.server.level.ServerLevel level,
@@ -546,7 +475,8 @@ public class MinerHandler {
                 .getKey(state.getBlock())
                 .getPath();
 
-        return blockName.contains("planks")
+        return blockName.contains("oak")
+                || blockName.contains("planks")
                 || blockName.contains("stairs")
                 || blockName.contains("slab")
                 || blockName.contains("fence")
@@ -584,7 +514,6 @@ public class MinerHandler {
             }
         }
 
-        // 如果石头上方是空气，也允许站在石头上方附近。
         BlockPos above = stonePos.above();
 
         if (isStandable(level, above)) {
@@ -641,7 +570,12 @@ public class MinerHandler {
                 || itemName.equals("minecraft:stone")
                 || itemName.equals("minecraft:andesite")
                 || itemName.equals("minecraft:diorite")
-                || itemName.equals("minecraft:granite");
+                || itemName.equals("minecraft:granite")
+                || itemName.equals("minecraft:tuff")
+                || itemName.equals("minecraft:calcite")
+                || itemName.equals("minecraft:cobbled_deepslate")
+                || itemName.equals("minecraft:deepslate")
+                || itemName.equals("minecraft:coal");
     }
 
     private static String getState(Villager villager) {

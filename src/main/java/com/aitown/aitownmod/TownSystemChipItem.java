@@ -11,11 +11,12 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.UseOnContext;
+import net.minecraft.world.level.Level;
 
 /**
  * 小镇系统芯片。
  *
- * 第一版不做 GUI，先用最小闭环：
+ * 第一版不做 GUI，先用聊天栏完成小镇系统最小闭环：
  *
  * 1. Shift + 右键方块：
  *    设置当前玩家选择的小镇中心 / 仓库中心。
@@ -24,7 +25,13 @@ import net.minecraft.world.item.context.UseOnContext;
  *    查看该村民状态。
  *
  * 3. Shift + 右键智能村民：
- *    将该村民注入小镇系统，并在 建筑师 / 伐木工 之间循环切换。
+ *    将该村民注入小镇系统，并在 建筑师 / 伐木工 / 矿工 / 手工业者 之间循环切换。
+ *
+ * 4. 右键空气：
+ *    展开当前玩家通过小镇系统芯片注册过的智能村民列表，显示他们的状态、任务和位置。
+ *
+ * 5. Shift + 右键空气：
+ *    查看当前仓库库存和最近仓库存取记录。
  */
 public class TownSystemChipItem extends Item {
     private static final String PLAYER_TOWN_X = "SelectedTownX";
@@ -35,6 +42,47 @@ public class TownSystemChipItem extends Item {
         super(properties);
     }
 
+    /**
+     * 右键空气时触发。
+     *
+     * 注意：
+     * - useOn(...) 处理右键方块。
+     * - interactLivingEntity(...) 处理右键实体。
+     * - use(...) 处理右键空气。
+     *
+     * 普通右键空气显示村民状态。
+     * Shift + 右键空气显示仓库库存和仓库流水。
+     */
+    @Override
+    public InteractionResult use(
+            Level level,
+            Player player,
+            InteractionHand hand
+    ) {
+        // 客户端只返回成功，不在客户端读取或修改小镇数据。
+        if (level.isClientSide()) {
+            return InteractionResult.SUCCESS;
+        }
+
+        if (!(level instanceof ServerLevel serverLevel)) {
+            return InteractionResult.SUCCESS;
+        }
+
+        if (player.isShiftKeyDown()) {
+            showWarehouseStatusPanel(serverLevel, player);
+        } else {
+            showRegisteredTownStatusPanel(serverLevel, player);
+        }
+
+        return InteractionResult.SUCCESS;
+    }
+
+    /**
+     * Shift + 右键方块：设置小镇中心 / 仓库中心。
+     *
+     * 当前版本把小镇中心和仓库中心视为同一个位置。
+     * 后续如果做独立仓库方块，可以再把这两个坐标拆开。
+     */
     @Override
     public InteractionResult useOn(UseOnContext context) {
         Player player = context.getPlayer();
@@ -43,6 +91,7 @@ public class TownSystemChipItem extends Item {
             return InteractionResult.PASS;
         }
 
+        // 只在服务端写玩家 NBT，避免客户端重复写入。
         if (player.level().isClientSide()) {
             return InteractionResult.SUCCESS;
         }
@@ -70,6 +119,12 @@ public class TownSystemChipItem extends Item {
         return InteractionResult.SUCCESS;
     }
 
+    /**
+     * 右键村民：查看或切换职业。
+     *
+     * 普通右键：查看单个智能村民状态。
+     * Shift + 右键：把村民注册到小镇系统，并循环切换职业。
+     */
     @Override
     public InteractionResult interactLivingEntity(
             ItemStack stack,
@@ -106,11 +161,13 @@ public class TownSystemChipItem extends Item {
         String nextRole;
 
         // 第一版不用 GUI，直接循环切换：
-        // 建筑师 -> 伐木工 -> 矿工 -> 建筑师
+        // 建筑师 -> 伐木工 -> 矿工 -> 手工业者 -> 建筑师
         if (SmartVillagerData.ROLE_BUILDER.equals(currentRole)) {
             nextRole = SmartVillagerData.ROLE_LUMBERJACK;
         } else if (SmartVillagerData.ROLE_LUMBERJACK.equals(currentRole)) {
             nextRole = SmartVillagerData.ROLE_MINER;
+        } else if (SmartVillagerData.ROLE_MINER.equals(currentRole)) {
+            nextRole = SmartVillagerData.ROLE_HANDWORKER;
         } else {
             nextRole = SmartVillagerData.ROLE_BUILDER;
         }
@@ -118,7 +175,7 @@ public class TownSystemChipItem extends Item {
         SmartVillagerData.setRole(villager, nextRole);
 
         // 注册到当前玩家的小镇智能村民列表。
-        // 之后右键空气显示小镇状态时，就不需要扫描附近村民了。
+        // 之后右键空气显示小镇状态时，就不需要扫描附近村民。
         SmartVillagerData.registerSmartVillagerToPlayerTown(player, villager);
 
         player.sendSystemMessage(Component.literal(
@@ -145,6 +202,13 @@ public class TownSystemChipItem extends Item {
                 player.getPersistentData().getInt(PLAYER_TOWN_Z).orElse(player.getBlockZ())
         );
     }
+
+    /**
+     * 展示当前玩家通过小镇系统芯片注册过的所有智能村民。
+     *
+     * 当前不扫描世界范围内的村民，而是直接读取玩家 NBT 中保存的 UUID 列表。
+     * 这样可以保证面板只显示“这个小镇系统芯片管理过的智能村民”。
+     */
     private static void showRegisteredTownStatusPanel(
             ServerLevel level,
             Player player
@@ -165,6 +229,8 @@ public class TownSystemChipItem extends Item {
             return;
         }
 
+        BlockPos selectedTown = getSelectedTown(player);
+
         player.sendSystemMessage(Component.literal(
                 "§a已注册智能村民：§f" + villagerIds.size() + " 个"
         ));
@@ -182,6 +248,13 @@ public class TownSystemChipItem extends Item {
 
         player.sendSystemMessage(Component.literal("§6===================================="));
     }
+
+    /**
+     * 输出单个智能村民的摘要。
+     *
+     * 内容尽量短：名字、职业、状态、任务和位置。
+     * 这里不再显示背包详情，避免信息太多。
+     */
     private static void sendRegisteredVillagerSummary(
             Player player,
             Villager villager
@@ -195,11 +268,6 @@ public class TownSystemChipItem extends Item {
 
         BlockPos pos = villager.blockPosition();
 
-        int usedSlots = SmartVillagerData.usedSlots(villager);
-        int totalItems = SmartVillagerData.totalItems(villager);
-
-        String inventory = SmartVillagerData.getInventorySummary(villager, 4);
-
         player.sendSystemMessage(Component.literal(
                 "§e- " + name
                         + " §7[" + role + "] "
@@ -212,13 +280,95 @@ public class TownSystemChipItem extends Item {
                         + pos.getX() + ", "
                         + pos.getY() + ", "
                         + pos.getZ()
-                        + " §7｜背包：§f"
-                        + usedSlots + " 格 / "
-                        + totalItems + " 个"
+        ));
+    }
+
+    /**
+     * Shift + 右键空气：显示仓库库存和最近仓库流水。
+     */
+    private static void showWarehouseStatusPanel(
+            ServerLevel level,
+            Player player
+    ) {
+        if (!hasSelectedTown(player)) {
+            player.sendSystemMessage(Component.literal(
+                    "§c[小镇系统芯片] 还没有设置小镇中心。请先 Shift + 右键点击仓库中心方块。"
+            ));
+            return;
+        }
+
+        SmartVillagerData.cleanupRegisteredSmartVillagers(level, player);
+
+        BlockPos selectedTown = getSelectedTown(player);
+        java.util.ArrayList<java.util.UUID> villagerIds =
+                SmartVillagerData.getRegisteredSmartVillagerIds(player);
+
+        player.sendSystemMessage(Component.literal("§6========== 小镇仓库状态 =========="));
+        player.sendSystemMessage(Component.literal(
+                "§e仓库中心：§f"
+                        + selectedTown.getX() + ", "
+                        + selectedTown.getY() + ", "
+                        + selectedTown.getZ()
         ));
 
         player.sendSystemMessage(Component.literal(
-                "  §7物品：§f" + inventory
+                "§b追踪库存：§f"
+                        + SmartVillagerData.getWarehouseTrackedSummary(level, selectedTown)
         ));
+
+        player.sendSystemMessage(Component.literal(
+                "§b全部库存：§f"
+                        + SmartVillagerData.getWarehouseFullSummary(level, selectedTown, 24)
+        ));
+
+        player.sendSystemMessage(Component.literal("§e最近仓库流水："));
+
+        int workersWithLog = 0;
+
+        for (java.util.UUID uuid : villagerIds) {
+            if (!(level.getEntity(uuid) instanceof Villager villager)) {
+                continue;
+            }
+
+            String warehouseLog = SmartVillagerData.getWarehouseLog(villager);
+
+            if ("暂无记录".equals(warehouseLog)) {
+                continue;
+            }
+
+            workersWithLog++;
+
+            player.sendSystemMessage(Component.literal(
+                    "§6- "
+                            + SmartVillagerData.roleDisplayName(SmartVillagerData.getRole(villager))
+                            + "/"
+                            + SmartVillagerData.getCitizenName(villager)
+                            + " 的记录："
+            ));
+
+            String[] lines = warehouseLog.split("\\n");
+            int shownForWorker = 0;
+
+            for (String line : lines) {
+                if (line.isBlank()) {
+                    continue;
+                }
+
+                player.sendSystemMessage(Component.literal("  §7- " + line));
+                shownForWorker++;
+
+                if (shownForWorker >= 4) {
+                    break;
+                }
+            }
+        }
+
+        if (workersWithLog == 0) {
+            player.sendSystemMessage(Component.literal("§7暂无仓库存取记录。"));
+        }
+
+        player.sendSystemMessage(Component.literal("§8说明：当前流水记录暂时保存在每个执行操作的智能村民身上。"));
+        player.sendSystemMessage(Component.literal("§8如果某个职业没有记录，通常说明它还没有通过统一仓库接口成功存取，或该村民未被芯片注册 / 当前未加载。"));
+        player.sendSystemMessage(Component.literal("§6================================"));
     }
 }

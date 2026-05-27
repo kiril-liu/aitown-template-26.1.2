@@ -21,13 +21,19 @@ public class SmartVillagerData {
     public static final String ROLE_BUILDER = "builder";
     public static final String ROLE_LUMBERJACK = "lumberjack";
     public static final String ROLE_MINER = "miner";
-    public static final String KEY_PLAYER_TOWN_VILLAGERS = "TownSmartVillagerIds";
 
+    public static final String ROLE_HANDWORKER = "handworker";
+    public static final String KEY_PLAYER_TOWN_VILLAGERS = "TownSmartVillagerIds";
     public static final String KEY_NAME = "CitizenName";
     public static final String KEY_ID = "CitizenId";
     public static final String KEY_ROLE = "SmartRole";
     public static final String KEY_STATUS = "WorkerStatus";
     public static final String KEY_TASK = "CurrentTask";
+
+    public static final String KEY_COINS = "AITownCoins";
+    public static final String KEY_TOTAL_EARNED = "AITownTotalEarned";
+    public static final String KEY_TOTAL_SPENT = "AITownTotalSpent";
+    public static final String KEY_WAREHOUSE_LOG = "WarehouseLog";
 
     public static final String KEY_TOWN_X = "TownCenterX";
     public static final String KEY_TOWN_Y = "TownCenterY";
@@ -220,6 +226,49 @@ public class SmartVillagerData {
         return villager.getPersistentData().getString(KEY_ID).orElse("AIT-??????");
     }
 
+    public static int getCoins(Villager villager) {
+        return villager.getPersistentData().getInt(KEY_COINS).orElse(0);
+    }
+
+    public static int getTotalEarned(Villager villager) {
+        return villager.getPersistentData().getInt(KEY_TOTAL_EARNED).orElse(0);
+    }
+
+    public static int getTotalSpent(Villager villager) {
+        return villager.getPersistentData().getInt(KEY_TOTAL_SPENT).orElse(0);
+    }
+
+    public static void addCoins(Villager villager, int amount) {
+        if (amount <= 0) {
+            return;
+        }
+
+        int coins = getCoins(villager);
+        int totalEarned = getTotalEarned(villager);
+
+        villager.getPersistentData().putInt(KEY_COINS, coins + amount);
+        villager.getPersistentData().putInt(KEY_TOTAL_EARNED, totalEarned + amount);
+    }
+
+    public static boolean spendCoins(Villager villager, int amount) {
+        if (amount <= 0) {
+            return true;
+        }
+
+        int coins = getCoins(villager);
+
+        if (coins < amount) {
+            return false;
+        }
+
+        int totalSpent = getTotalSpent(villager);
+
+        villager.getPersistentData().putInt(KEY_COINS, coins - amount);
+        villager.getPersistentData().putInt(KEY_TOTAL_SPENT, totalSpent + amount);
+
+        return true;
+    }
+
     public static String getRole(Villager villager) {
         return villager.getPersistentData().getString(KEY_ROLE).orElse(ROLE_NONE);
     }
@@ -240,6 +289,10 @@ public class SmartVillagerData {
             return "矿工";
         }
 
+        if (ROLE_HANDWORKER.equals(role)) {
+            return "手工业者";
+        }
+
         return "未分配";
     }
 
@@ -252,6 +305,7 @@ public class SmartVillagerData {
         villager.getPersistentData().putBoolean("IsBuilding", ROLE_BUILDER.equals(role));
         villager.getPersistentData().putBoolean("IsLumberjack", ROLE_LUMBERJACK.equals(role));
         villager.getPersistentData().putBoolean("IsMiner", ROLE_MINER.equals(role));
+        villager.getPersistentData().putBoolean("IsHandworker", ROLE_HANDWORKER.equals(role));
 
         setStatus(villager, "待命", "等待小镇任务");
     }
@@ -732,6 +786,16 @@ public class SmartVillagerData {
                             need -= moved;
                             movedTotal += moved;
 
+                            recordWarehouseTransaction(
+                                    level,
+                                    villager,
+                                    warehouseCenter,
+                                    "取出",
+                                    request.itemName(),
+                                    moved,
+                                    radius
+                            );
+
                             if (need <= 0) {
                                 break searchWarehouse;
                             }
@@ -770,6 +834,7 @@ public class SmartVillagerData {
     ) {
         SimpleContainer inventory = villager.getInventory();
         int movedTotal = 0;
+        int earnedCoins = 0;
 
         for (ItemRequest request : requests) {
             int remainingToDeposit = request.count();
@@ -802,7 +867,22 @@ public class SmartVillagerData {
 
                 remainingToDeposit -= moved;
                 movedTotal += moved;
+                earnedCoins += TradeValueRegistry.calculateValue(request.itemName(), moved);
+
+                recordWarehouseTransaction(
+                        level,
+                        villager,
+                        warehouseCenter,
+                        "存入",
+                        request.itemName(),
+                        moved,
+                        radius
+                );
             }
+        }
+
+        if (earnedCoins > 0) {
+            addCoins(villager, earnedCoins);
         }
 
         if (movedTotal > 0) {
@@ -909,6 +989,190 @@ public class SmartVillagerData {
         return stack;
     }
 
+    public static int countWarehouseItem(
+            net.minecraft.server.level.ServerLevel level,
+            BlockPos warehouseCenter,
+            String itemName,
+            int radius
+    ) {
+        int count = 0;
+        BlockPos.MutableBlockPos mPos = new BlockPos.MutableBlockPos();
+
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = -3; dy <= 3; dy++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    mPos.set(
+                            warehouseCenter.getX() + dx,
+                            warehouseCenter.getY() + dy,
+                            warehouseCenter.getZ() + dz
+                    );
+
+                    if (!(level.getBlockEntity(mPos) instanceof Container chest)) {
+                        continue;
+                    }
+
+                    for (int slot = 0; slot < chest.getContainerSize(); slot++) {
+                        ItemStack stack = chest.getItem(slot);
+
+                        if (!stack.isEmpty() && itemMatches(stack, itemName)) {
+                            count += stack.getCount();
+                        }
+                    }
+                }
+            }
+        }
+
+        return count;
+    }
+
+    public static String getWarehouseTrackedSummary(
+            net.minecraft.server.level.ServerLevel level,
+            BlockPos warehouseCenter
+    ) {
+        String[] trackedItems = new String[]{
+                "minecraft:oak_log",
+                "minecraft:oak_planks",
+                "minecraft:oak_fence",
+                "minecraft:oak_fence_gate",
+                "minecraft:torch",
+                "minecraft:stick",
+                "minecraft:coal",
+                "minecraft:cobblestone",
+                "minecraft:stone",
+                "minecraft:oak_sapling"
+        };
+
+        StringBuilder builder = new StringBuilder();
+
+        for (String itemName : trackedItems) {
+            int count = countWarehouseItem(level, warehouseCenter, itemName, WAREHOUSE_RADIUS);
+
+            if (count <= 0) {
+                continue;
+            }
+
+            if (builder.length() > 0) {
+                builder.append("，");
+            }
+
+            builder.append(itemName).append(" x").append(count);
+        }
+
+        if (builder.length() == 0) {
+            return "暂无已追踪物品";
+        }
+
+        return builder.toString();
+    }
+
+    public static String getWarehouseFullSummary(
+            net.minecraft.server.level.ServerLevel level,
+            BlockPos warehouseCenter,
+            int maxEntries
+    ) {
+        LinkedHashMap<String, Integer> itemCounts = new LinkedHashMap<>();
+        BlockPos.MutableBlockPos mPos = new BlockPos.MutableBlockPos();
+
+        for (int dx = -WAREHOUSE_RADIUS; dx <= WAREHOUSE_RADIUS; dx++) {
+            for (int dy = -3; dy <= 3; dy++) {
+                for (int dz = -WAREHOUSE_RADIUS; dz <= WAREHOUSE_RADIUS; dz++) {
+                    mPos.set(
+                            warehouseCenter.getX() + dx,
+                            warehouseCenter.getY() + dy,
+                            warehouseCenter.getZ() + dz
+                    );
+
+                    if (!(level.getBlockEntity(mPos) instanceof Container chest)) {
+                        continue;
+                    }
+
+                    for (int slot = 0; slot < chest.getContainerSize(); slot++) {
+                        ItemStack stack = chest.getItem(slot);
+
+                        if (stack.isEmpty()) {
+                            continue;
+                        }
+
+                        String itemName = itemId(stack);
+                        itemCounts.put(itemName, itemCounts.getOrDefault(itemName, 0) + stack.getCount());
+                    }
+                }
+            }
+        }
+
+        if (itemCounts.isEmpty()) {
+            return "仓库为空或没有找到箱子";
+        }
+
+        StringBuilder builder = new StringBuilder();
+        int shown = 0;
+
+        for (Map.Entry<String, Integer> entry : itemCounts.entrySet()) {
+            if (shown > 0) {
+                builder.append("，");
+            }
+
+            builder.append(entry.getKey()).append(" x").append(entry.getValue());
+            shown++;
+
+            if (shown >= maxEntries) {
+                int remainingTypes = itemCounts.size() - shown;
+
+                if (remainingTypes > 0) {
+                    builder.append("，等 ").append(itemCounts.size()).append(" 类");
+                }
+
+                break;
+            }
+        }
+
+        return builder.toString();
+    }
+
+    public static String getWarehouseLog(Villager villager) {
+        return villager.getPersistentData().getString(KEY_WAREHOUSE_LOG).orElse("暂无记录");
+    }
+
+    private static void recordWarehouseTransaction(
+            net.minecraft.server.level.ServerLevel level,
+            Villager villager,
+            BlockPos warehouseCenter,
+            String action,
+            String itemName,
+            int moved,
+            int radius
+    ) {
+        if (moved <= 0) {
+            return;
+        }
+
+        ensureIdentity(villager);
+
+        int remaining = countWarehouseItem(level, warehouseCenter, itemName, radius);
+
+        String line = roleDisplayName(getRole(villager))
+                + "/" + getCitizenName(villager)
+                + " " + action
+                + " " + itemName
+                + " x" + moved
+                + "，仓库剩余 x" + remaining;
+
+        String oldLog = villager.getPersistentData().getString(KEY_WAREHOUSE_LOG).orElse("");
+        ArrayList<String> lines = new ArrayList<>();
+
+        if (!oldLog.isBlank()) {
+            lines.addAll(Arrays.asList(oldLog.split("\\n")));
+        }
+
+        lines.add(0, line);
+
+        while (lines.size() > 8) {
+            lines.remove(lines.size() - 1);
+        }
+
+        villager.getPersistentData().putString(KEY_WAREHOUSE_LOG, String.join("\n", lines));
+    }
+
     public static void sendStatusToPlayer(Villager villager, net.minecraft.world.entity.player.Player player) {
         BlockPos town = getTownCenter(villager);
         BlockPos warehouse = getWarehouseCenter(villager);
@@ -918,6 +1182,7 @@ public class SmartVillagerData {
         player.sendSystemMessage(Component.literal("§e职业：§f" + roleDisplayName(getRole(villager))));
         player.sendSystemMessage(Component.literal("§e状态：§f" + getStatus(villager)));
         player.sendSystemMessage(Component.literal("§e任务：§f" + getTask(villager)));
+        player.sendSystemMessage(Component.literal("§e金币：§f" + getCoins(villager) + " §7｜累计收入：" + getTotalEarned(villager) + " ｜累计支出：" + getTotalSpent(villager)));
         player.sendSystemMessage(Component.literal("§e小镇中心：§f" + town.getX() + ", " + town.getY() + ", " + town.getZ()));
         player.sendSystemMessage(Component.literal("§e仓库中心：§f" + warehouse.getX() + ", " + warehouse.getY() + ", " + warehouse.getZ()));
     }

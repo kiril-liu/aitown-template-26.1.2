@@ -22,7 +22,6 @@ import java.util.List;
 @EventBusSubscriber(modid = aitown.MODID)
 public class LumberjackHandler {
     private static final String KEY_STATE = "LumberjackState";
-
     private static final String STATE_SEEK_TREE = "seek_tree";
     private static final String STATE_MOVE_TO_TREE = "move_to_tree";
     private static final String STATE_CHOP_TREE = "chop_tree";
@@ -41,7 +40,8 @@ public class LumberjackHandler {
     private static final String KEY_WORK_Z = "LumberjackWorkZ";
 
     private static final int TREE_SEARCH_RADIUS = 24;
-    private static final int MAX_BREAK_BLOCKS_PER_TICK = 6;
+    private static final int MAX_LOGS_PER_STEP = 1;
+    private static final int MAX_LEAVES_PER_STEP = 1;
     private static final int DEPOSIT_THRESHOLD = 24;
 
     @SubscribeEvent
@@ -177,7 +177,7 @@ public class LumberjackHandler {
             return;
         }
 
-        SmartVillagerData.setStatus(villager, "伐木中", "分批砍伐树干和树叶");
+        SmartVillagerData.setStatus(villager, "伐木中", "每次砍伐一块树木方块");
 
         int broken = chopTreeStep(level, villager, treeBase);
 
@@ -343,13 +343,15 @@ public class LumberjackHandler {
     }
 
     private static int chopTreeStep(net.minecraft.server.level.ServerLevel level, Villager villager, BlockPos treeBase) {
-        int broken = breakBlocks(level, villager, treeBase, true, MAX_BREAK_BLOCKS_PER_TICK);
+        // 第一版改成更真实的节奏：每次状态机只破坏一个方块。
+        // 优先砍原木；如果已经没有原木，再清理一块树叶。
+        int brokenLogs = breakBlocks(level, villager, treeBase, true, MAX_LOGS_PER_STEP);
 
-        if (broken >= MAX_BREAK_BLOCKS_PER_TICK) {
-            return broken;
+        if (brokenLogs > 0) {
+            return brokenLogs;
         }
 
-        return broken + breakBlocks(level, villager, treeBase, false, MAX_BREAK_BLOCKS_PER_TICK - broken);
+        return breakBlocks(level, villager, treeBase, false, MAX_LEAVES_PER_STEP);
     }
 
     private static int breakBlocks(
