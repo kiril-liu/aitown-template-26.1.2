@@ -1,7 +1,9 @@
 package com.aitown.aitownmod;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
@@ -24,11 +26,11 @@ import net.minecraft.world.level.Level;
  * 2. 普通右键智能村民：
  *    查看该村民状态。
  *
- * 3. Shift + 右键智能村民：
- *    将该村民注入小镇系统，并在 建筑师 / 伐木工 / 矿工 / 手工业者 之间循环切换。
+ * 3. Shift + 右键村民：
+ *    打开职业选择菜单。点击聊天栏里的职业后，才会正式注册并设置职业。
  *
  * 4. 右键空气：
- *    展开当前玩家通过小镇系统芯片注册过的智能村民列表，显示他们的状态、任务和位置。
+ *    展开当前玩家通过小镇系统芯片注册过的智能村民列表。
  *
  * 5. Shift + 右键空气：
  *    查看当前仓库库存和最近仓库存取记录。
@@ -120,10 +122,10 @@ public class TownSystemChipItem extends Item {
     }
 
     /**
-     * 右键村民：查看或切换职业。
+     * 右键村民：查看状态或打开职业选择菜单。
      *
      * 普通右键：查看单个智能村民状态。
-     * Shift + 右键：把村民注册到小镇系统，并循环切换职业。
+     * Shift + 右键：显示职业选择 clickable text。
      */
     @Override
     public InteractionResult interactLivingEntity(
@@ -154,39 +156,47 @@ public class TownSystemChipItem extends Item {
             return InteractionResult.SUCCESS;
         }
 
-        BlockPos townCenter = getSelectedTown(player);
-        SmartVillagerData.setTownAndWarehouse(villager, townCenter);
-
-        String currentRole = SmartVillagerData.getRole(villager);
-        String nextRole;
-
-        // 第一版不用 GUI，直接循环切换：
-        // 建筑师 -> 伐木工 -> 矿工 -> 手工业者 -> 建筑师
-        if (SmartVillagerData.ROLE_BUILDER.equals(currentRole)) {
-            nextRole = SmartVillagerData.ROLE_LUMBERJACK;
-        } else if (SmartVillagerData.ROLE_LUMBERJACK.equals(currentRole)) {
-            nextRole = SmartVillagerData.ROLE_MINER;
-        } else if (SmartVillagerData.ROLE_MINER.equals(currentRole)) {
-            nextRole = SmartVillagerData.ROLE_HANDWORKER;
-        } else {
-            nextRole = SmartVillagerData.ROLE_BUILDER;
-        }
-
-        SmartVillagerData.setRole(villager, nextRole);
-
-        // 注册到当前玩家的小镇智能村民列表。
-        // 之后右键空气显示小镇状态时，就不需要扫描附近村民。
-        SmartVillagerData.registerSmartVillagerToPlayerTown(player, villager);
-
-        player.sendSystemMessage(Component.literal(
-                "§a[小镇系统芯片] 已将 "
-                        + SmartVillagerData.getCitizenName(villager)
-                        + " 设置为：§e"
-                        + SmartVillagerData.roleDisplayName(nextRole)
-                        + "§7，并注册到小镇智能村民列表。"
-        ));
-
+        sendRoleSelectionMenu(player, villager);
         return InteractionResult.SUCCESS;
+    }
+
+    private static void sendRoleSelectionMenu(Player player, Villager villager) {
+        String name = SmartVillagerData.getCitizenName(villager);
+        String uuid = villager.getUUID().toString();
+
+        player.sendSystemMessage(Component.literal("§6========== 选择智能村民职业 =========="));
+        player.sendSystemMessage(Component.literal("§e村民：§f" + name));
+        player.sendSystemMessage(Component.literal("§7点击下面的职业后，会把它注册到当前小镇，并设置为该职业。"));
+
+        player.sendSystemMessage(Component.empty()
+                .append(roleButton(uuid, SmartVillagerData.ROLE_BUILDER, "建筑工"))
+                .append(Component.literal("  "))
+                .append(roleButton(uuid, SmartVillagerData.ROLE_LUMBERJACK, "伐木工"))
+                .append(Component.literal("  "))
+                .append(roleButton(uuid, SmartVillagerData.ROLE_MINER, "采石工"))
+        );
+
+        player.sendSystemMessage(Component.empty()
+                .append(roleButton(uuid, SmartVillagerData.ROLE_HANDWORKER, "工匠师"))
+                .append(Component.literal("  "))
+                .append(roleButton(uuid, SmartVillagerData.ROLE_FARMER, "农田工"))
+                .append(Component.literal("  "))
+                .append(roleButton(uuid, SmartVillagerData.ROLE_SHEPHERD, "牧羊工"))
+        );
+
+        player.sendSystemMessage(Component.literal("§6===================================="));
+    }
+
+    private static Component roleButton(String uuid, String role, String label) {
+        return Component.literal("§a[" + label + "]")
+                .withStyle(style -> style
+                        .withClickEvent(new ClickEvent.RunCommand(
+                                "/aitown_set_role " + uuid + " " + role
+                        ))
+                        .withHoverEvent(new HoverEvent.ShowText(
+                                Component.literal("点击后设置为 " + label)
+                        ))
+                );
     }
 
     private static boolean hasSelectedTown(Player player) {
@@ -229,8 +239,6 @@ public class TownSystemChipItem extends Item {
             return;
         }
 
-        BlockPos selectedTown = getSelectedTown(player);
-
         player.sendSystemMessage(Component.literal(
                 "§a已注册智能村民：§f" + villagerIds.size() + " 个"
         ));
@@ -252,8 +260,8 @@ public class TownSystemChipItem extends Item {
     /**
      * 输出单个智能村民的摘要。
      *
-     * 内容尽量短：名字、职业、状态、任务和位置。
-     * 这里不再显示背包详情，避免信息太多。
+     * 内容尽量短：名字、职业、饥饿值和详情入口。
+     * 当前状态、当前任务、等待材料、位置等信息全部放进点击后的详情里。
      */
     private static void sendRegisteredVillagerSummary(
             Player player,
@@ -263,24 +271,53 @@ public class TownSystemChipItem extends Item {
 
         String name = SmartVillagerData.getCitizenName(villager);
         String role = SmartVillagerData.roleDisplayName(SmartVillagerData.getRole(villager));
-        String status = SmartVillagerData.getStatus(villager);
-        String task = SmartVillagerData.getTask(villager);
+        String uuid = villager.getUUID().toString();
 
-        BlockPos pos = villager.blockPosition();
-
-        player.sendSystemMessage(Component.literal(
+        Component clickableLine = Component.literal(
                 "§e- " + name
-                        + " §7[" + role + "] "
-                        + "§f" + status
-                        + " §7｜§f" + task
-        ));
+                        + " §7[" + role + "]"
+                        + " §7｜饥饿：§f" + SmartVillagerData.getHunger(villager)
+                        + " §a[详情]"
+        ).withStyle(style -> style
+                .withClickEvent(new ClickEvent.RunCommand(
+                        "/aitown_villager " + uuid
+                ))
+                .withHoverEvent(new HoverEvent.ShowText(
+                        Component.literal("点击查看 " + name + " 的详细状态和日记")
+                ))
+        );
 
-        player.sendSystemMessage(Component.literal(
-                "  §7位置：§f"
-                        + pos.getX() + ", "
-                        + pos.getY() + ", "
-                        + pos.getZ()
-        ));
+        player.sendSystemMessage(clickableLine);
+    }
+
+    private static int extractLogTick(String line) {
+        if (line == null || !line.startsWith("T")) {
+            return 0;
+        }
+
+        int spaceIndex = line.indexOf(' ');
+        if (spaceIndex <= 1) {
+            return 0;
+        }
+
+        try {
+            return Integer.parseInt(line.substring(1, spaceIndex));
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private static String stripLogTick(String line) {
+        if (line == null || !line.startsWith("T")) {
+            return line;
+        }
+
+        int spaceIndex = line.indexOf(' ');
+        if (spaceIndex <= 0 || spaceIndex >= line.length() - 1) {
+            return line;
+        }
+
+        return line.substring(spaceIndex + 1);
     }
 
     /**
@@ -321,9 +358,9 @@ public class TownSystemChipItem extends Item {
                         + SmartVillagerData.getWarehouseFullSummary(level, selectedTown, 24)
         ));
 
-        player.sendSystemMessage(Component.literal("§e最近仓库流水："));
+        player.sendSystemMessage(Component.literal("§e最近 20 条仓库流水："));
 
-        int workersWithLog = 0;
+        java.util.ArrayList<String> recentLogs = new java.util.ArrayList<>();
 
         for (java.util.UUID uuid : villagerIds) {
             if (!(level.getEntity(uuid) instanceof Villager villager)) {
@@ -336,39 +373,33 @@ public class TownSystemChipItem extends Item {
                 continue;
             }
 
-            workersWithLog++;
-
-            player.sendSystemMessage(Component.literal(
-                    "§6- "
-                            + SmartVillagerData.roleDisplayName(SmartVillagerData.getRole(villager))
-                            + "/"
-                            + SmartVillagerData.getCitizenName(villager)
-                            + " 的记录："
-            ));
-
             String[] lines = warehouseLog.split("\\n");
-            int shownForWorker = 0;
 
             for (String line : lines) {
-                if (line.isBlank()) {
-                    continue;
+                if (!line.isBlank()) {
+                    recentLogs.add(line);
                 }
+            }
+        }
 
-                player.sendSystemMessage(Component.literal("  §7- " + line));
-                shownForWorker++;
+        recentLogs.sort((a, b) -> Integer.compare(extractLogTick(b), extractLogTick(a)));
 
-                if (shownForWorker >= 4) {
+        if (recentLogs.isEmpty()) {
+            player.sendSystemMessage(Component.literal("§7暂无仓库存取记录。"));
+        } else {
+            int shown = 0;
+
+            for (String line : recentLogs) {
+                player.sendSystemMessage(Component.literal("§7- " + stripLogTick(line)));
+                shown++;
+
+                if (shown >= 20) {
                     break;
                 }
             }
         }
 
-        if (workersWithLog == 0) {
-            player.sendSystemMessage(Component.literal("§7暂无仓库存取记录。"));
-        }
-
-        player.sendSystemMessage(Component.literal("§8说明：当前流水记录暂时保存在每个执行操作的智能村民身上。"));
-        player.sendSystemMessage(Component.literal("§8如果某个职业没有记录，通常说明它还没有通过统一仓库接口成功存取，或该村民未被芯片注册 / 当前未加载。"));
+        player.sendSystemMessage(Component.literal("§8说明：当前流水会合并所有已注册且已加载的智能村民记录，并按最近时间排序显示。"));
         player.sendSystemMessage(Component.literal("§6================================"));
     }
 }

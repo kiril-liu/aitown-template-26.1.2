@@ -2,7 +2,9 @@ package com.aitown.aitownmod;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.Container;
@@ -23,6 +25,8 @@ public class SmartVillagerData {
     public static final String ROLE_MINER = "miner";
 
     public static final String ROLE_HANDWORKER = "handworker";
+    public static final String ROLE_FARMER = "farmer";
+    public static final String ROLE_SHEPHERD = "shepherd";
     public static final String KEY_PLAYER_TOWN_VILLAGERS = "TownSmartVillagerIds";
     public static final String KEY_NAME = "CitizenName";
     public static final String KEY_ID = "CitizenId";
@@ -35,6 +39,16 @@ public class SmartVillagerData {
     public static final String KEY_TOTAL_SPENT = "AITownTotalSpent";
     public static final String KEY_WAREHOUSE_LOG = "WarehouseLog";
 
+    public static final String KEY_HUNGER = "AITownHunger";
+    public static final String KEY_LAST_HUNGER_TICK = "AITownLastHungerTick";
+    public static final String KEY_DIARY = "AITownDiary";
+
+    public static final int HUNGER_MAX = 100;
+    public static final int HUNGER_INTERRUPT = 80;
+    public static final int HUNGER_EAT_RECOVER = 30;
+    public static final int HUNGER_TICK_INTERVAL = 600;
+    public static final int DIARY_MAX_LINES = 20;
+
     public static final String KEY_TOWN_X = "TownCenterX";
     public static final String KEY_TOWN_Y = "TownCenterY";
     public static final String KEY_TOWN_Z = "TownCenterZ";
@@ -42,6 +56,18 @@ public class SmartVillagerData {
     public static final String KEY_WAREHOUSE_X = "WarehouseX";
     public static final String KEY_WAREHOUSE_Y = "WarehouseY";
     public static final String KEY_WAREHOUSE_Z = "WarehouseZ";
+
+    public static final String KEY_MEMORY_HOME_X = "MemoryHomeX";
+    public static final String KEY_MEMORY_HOME_Y = "MemoryHomeY";
+    public static final String KEY_MEMORY_HOME_Z = "MemoryHomeZ";
+
+    public static final String KEY_MEMORY_WORK_X = "MemoryWorkX";
+    public static final String KEY_MEMORY_WORK_Y = "MemoryWorkY";
+    public static final String KEY_MEMORY_WORK_Z = "MemoryWorkZ";
+
+    public static final String KEY_MEMORY_CANTEEN_X = "MemoryCanteenX";
+    public static final String KEY_MEMORY_CANTEEN_Y = "MemoryCanteenY";
+    public static final String KEY_MEMORY_CANTEEN_Z = "MemoryCanteenZ";
 
     private static final String KEY_TARGET_X = "TargetPlaceX";
     private static final String KEY_TARGET_Y = "TargetPlaceY";
@@ -279,18 +305,26 @@ public class SmartVillagerData {
 
     public static String roleDisplayName(String role) {
         if (ROLE_BUILDER.equals(role)) {
-            return "建筑师";
+            return "建筑工";
         }
 
         if (ROLE_LUMBERJACK.equals(role)) {
             return "伐木工";
         }
         if (ROLE_MINER.equals(role)) {
-            return "矿工";
+            return "采石工";
         }
 
         if (ROLE_HANDWORKER.equals(role)) {
-            return "手工业者";
+            return "工匠师";
+        }
+
+        if (ROLE_FARMER.equals(role)) {
+            return "农田工";
+        }
+
+        if (ROLE_SHEPHERD.equals(role)) {
+            return "牧羊工";
         }
 
         return "未分配";
@@ -306,6 +340,8 @@ public class SmartVillagerData {
         villager.getPersistentData().putBoolean("IsLumberjack", ROLE_LUMBERJACK.equals(role));
         villager.getPersistentData().putBoolean("IsMiner", ROLE_MINER.equals(role));
         villager.getPersistentData().putBoolean("IsHandworker", ROLE_HANDWORKER.equals(role));
+        villager.getPersistentData().putBoolean("IsFarmer", ROLE_FARMER.equals(role));
+        villager.getPersistentData().putBoolean("IsShepherd", ROLE_SHEPHERD.equals(role));
 
         setStatus(villager, "待命", "等待小镇任务");
     }
@@ -333,6 +369,136 @@ public class SmartVillagerData {
 
     public static boolean shouldThink(Villager villager, int intervalTicks) {
         return intervalTicks <= 1 || ((villager.tickCount + villager.getId()) % intervalTicks == 0);
+    }
+
+    public static int getHunger(Villager villager) {
+        return clamp(villager.getPersistentData().getInt(KEY_HUNGER).orElse(0), 0, HUNGER_MAX);
+    }
+
+    public static void setHunger(Villager villager, int value) {
+        villager.getPersistentData().putInt(KEY_HUNGER, clamp(value, 0, HUNGER_MAX));
+    }
+
+    public static void addHunger(Villager villager, int amount) {
+        if (amount == 0) {
+            return;
+        }
+
+        setHunger(villager, getHunger(villager) + amount);
+    }
+
+    public static void reduceHunger(Villager villager, int amount) {
+        if (amount <= 0) {
+            return;
+        }
+
+        setHunger(villager, getHunger(villager) - amount);
+    }
+
+    public static void tickHunger(Villager villager) {
+        if (!shouldThink(villager, HUNGER_TICK_INTERVAL)) {
+            return;
+        }
+
+        int oldHunger = getHunger(villager);
+        addHunger(villager, 1);
+
+        if (oldHunger < HUNGER_INTERRUPT && getHunger(villager) >= HUNGER_INTERRUPT) {
+            addDiary(villager, "我开始觉得很饿，需要找点东西吃。");
+        }
+    }
+
+    /**
+     * 饥饿中断逻辑。
+     *
+     * 返回 true 表示当前职业状态机应该暂停。
+     * 当前版本只从仓库取 1 个苹果，吃掉后降低 Hunger，不会搬空仓库。
+     */
+    public static boolean tryHandleHunger(
+            net.minecraft.server.level.ServerLevel level,
+            Villager villager
+    ) {
+        if (getHunger(villager) < HUNGER_INTERRUPT) {
+            return false;
+        }
+
+        if (consumeOne(villager.getInventory(), "minecraft:apple")) {
+            reduceHunger(villager, HUNGER_EAT_RECOVER);
+            setStatus(villager, "吃东西", "吃了一个苹果，饥饿值下降到 " + getHunger(villager));
+            addDiary(villager, "我吃了一个苹果，感觉没那么饿了。");
+            return true;
+        }
+
+        BlockPos warehouse = getWarehouseCenter(villager);
+        setStatus(villager, "寻找食物", "饥饿值 " + getHunger(villager) + "，去仓库找苹果");
+        setTargetPlace(villager, warehouse, "hunger_find_food");
+
+        boolean arrived = moveToTargetPlace(
+                villager,
+                PLACE_STORAGE,
+                SPEED_NORMAL
+        );
+
+        if (!arrived) {
+            return true;
+        }
+
+        int moved = takeItemsFromWarehouse(
+                level,
+                villager,
+                warehouse,
+                List.of(new ItemRequest("minecraft:apple", 1)),
+                WAREHOUSE_RADIUS
+        );
+
+        if (moved <= 0) {
+            setStatus(villager, "等待食物", "仓库没有苹果，暂时停止工作");
+            return true;
+        }
+
+        if (consumeOne(villager.getInventory(), "minecraft:apple")) {
+            reduceHunger(villager, HUNGER_EAT_RECOVER);
+            setStatus(villager, "吃东西", "从仓库拿到苹果并吃掉，饥饿值下降到 " + getHunger(villager));
+            addDiary(villager, "我从仓库拿到一个苹果并吃掉了。");
+        }
+
+        return true;
+    }
+
+    public static void addDiary(Villager villager, String line) {
+        if (line == null || line.isBlank()) {
+            return;
+        }
+
+        ensureIdentity(villager);
+
+        // 当前 NeoForge / Minecraft 版本里 Level 不再直接暴露 getDayTime()。
+        // 这里先用村民自身 tickCount 作为轻量时间戳，避免为了日记系统绑定世界时间 API。
+        int time = villager.tickCount;
+
+        String entry = "Tick " + time + " " + line;
+        String oldDiary = villager.getPersistentData().getString(KEY_DIARY).orElse("");
+        ArrayList<String> lines = new ArrayList<>();
+
+        if (!oldDiary.isBlank()) {
+            lines.addAll(Arrays.asList(oldDiary.split("\\n")));
+        }
+
+        lines.add(0, entry);
+
+        while (lines.size() > DIARY_MAX_LINES) {
+            lines.remove(lines.size() - 1);
+        }
+
+        villager.getPersistentData().putString(KEY_DIARY, String.join("\n", lines));
+    }
+
+    public static String getDiary(Villager villager) {
+        return villager.getPersistentData().getString(KEY_DIARY).orElse("暂无日记");
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     public static void setTownAndWarehouse(Villager villager, BlockPos pos) {
@@ -367,6 +533,91 @@ public class SmartVillagerData {
                 villager.getPersistentData().getInt(KEY_WAREHOUSE_Y).orElse(villager.getBlockY()),
                 villager.getPersistentData().getInt(KEY_WAREHOUSE_Z).orElse(villager.getBlockZ())
         );
+    }
+
+    public static void setMemoryHome(Villager villager, BlockPos pos) {
+        setMemoryPos(villager, KEY_MEMORY_HOME_X, KEY_MEMORY_HOME_Y, KEY_MEMORY_HOME_Z, pos);
+    }
+
+    public static void setMemoryWork(Villager villager, BlockPos pos) {
+        setMemoryPos(villager, KEY_MEMORY_WORK_X, KEY_MEMORY_WORK_Y, KEY_MEMORY_WORK_Z, pos);
+    }
+
+    public static void setMemoryCanteen(Villager villager, BlockPos pos) {
+        setMemoryPos(villager, KEY_MEMORY_CANTEEN_X, KEY_MEMORY_CANTEEN_Y, KEY_MEMORY_CANTEEN_Z, pos);
+    }
+
+    public static boolean hasMemoryWork(Villager villager) {
+        return hasMemoryPos(villager, KEY_MEMORY_WORK_X, KEY_MEMORY_WORK_Y, KEY_MEMORY_WORK_Z);
+    }
+
+    public static BlockPos getMemoryWorkOrCurrent(Villager villager) {
+        if (!hasMemoryWork(villager)) {
+            return villager.blockPosition();
+        }
+
+        return getMemoryPos(villager, KEY_MEMORY_WORK_X, KEY_MEMORY_WORK_Y, KEY_MEMORY_WORK_Z);
+    }
+
+    private static void setMemoryPos(
+            Villager villager,
+            String keyX,
+            String keyY,
+            String keyZ,
+            BlockPos pos
+    ) {
+        villager.getPersistentData().putInt(keyX, pos.getX());
+        villager.getPersistentData().putInt(keyY, pos.getY());
+        villager.getPersistentData().putInt(keyZ, pos.getZ());
+    }
+
+    private static boolean hasMemoryPos(
+            Villager villager,
+            String keyX,
+            String keyY,
+            String keyZ
+    ) {
+        return villager.getPersistentData().contains(keyX)
+                && villager.getPersistentData().contains(keyY)
+                && villager.getPersistentData().contains(keyZ);
+    }
+
+    private static BlockPos getMemoryPos(
+            Villager villager,
+            String keyX,
+            String keyY,
+            String keyZ
+    ) {
+        return new BlockPos(
+                villager.getPersistentData().getInt(keyX).orElse(villager.getBlockX()),
+                villager.getPersistentData().getInt(keyY).orElse(villager.getBlockY()),
+                villager.getPersistentData().getInt(keyZ).orElse(villager.getBlockZ())
+        );
+    }
+
+    private static String memoryText(
+            Villager villager,
+            String keyX,
+            String keyY,
+            String keyZ
+    ) {
+        if (!hasMemoryPos(villager, keyX, keyY, keyZ)) {
+            return "未设置";
+        }
+
+        BlockPos pos = getMemoryPos(villager, keyX, keyY, keyZ);
+        return pos.getX() + ", " + pos.getY() + ", " + pos.getZ();
+    }
+
+    public static String getTargetText(Villager villager) {
+        if (!hasTargetPlace(villager)) {
+            return "未设置";
+        }
+
+        BlockPos target = getTargetPlace(villager);
+        String action = villager.getPersistentData().getString(KEY_TARGET_ACTION).orElse("无动作");
+
+        return target.getX() + ", " + target.getY() + ", " + target.getZ() + " / " + action;
     }
 
     public static void setTargetPlace(Villager villager, BlockPos pos, String action) {
@@ -495,6 +746,49 @@ public class SmartVillagerData {
         }
 
         return BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
+    }
+
+    public static String displayItemName(String itemName) {
+        if (itemName == null || itemName.isBlank()) {
+            return "未知物品";
+        }
+
+        return switch (itemName) {
+            case "minecraft:oak_log" -> "橡木原木";
+            case "minecraft:oak_wood" -> "橡木";
+            case "minecraft:oak_planks" -> "橡木板";
+            case "minecraft:oak_fence" -> "橡木栅栏";
+            case "minecraft:oak_fence_gate" -> "橡木栅栏门";
+            case "minecraft:oak_stairs" -> "橡木楼梯";
+            case "minecraft:oak_door" -> "橡木门";
+            case "minecraft:white_bed" -> "白色床";
+            case "minecraft:torch" -> "火把";
+            case "minecraft:stick" -> "木棍";
+            case "minecraft:coal" -> "煤炭";
+            case "minecraft:cobblestone" -> "圆石";
+            case "minecraft:stone" -> "石头";
+            case "minecraft:oak_sapling" -> "橡树树苗";
+            case "minecraft:wheat" -> "小麦";
+            case "minecraft:wheat_seeds" -> "小麦种子";
+            case "minecraft:apple" -> "苹果";
+            case "minecraft:white_wool" -> "白色羊毛";
+            case "minecraft:orange_wool" -> "橙色羊毛";
+            case "minecraft:magenta_wool" -> "品红色羊毛";
+            case "minecraft:light_blue_wool" -> "淡蓝色羊毛";
+            case "minecraft:yellow_wool" -> "黄色羊毛";
+            case "minecraft:lime_wool" -> "黄绿色羊毛";
+            case "minecraft:pink_wool" -> "粉色羊毛";
+            case "minecraft:gray_wool" -> "灰色羊毛";
+            case "minecraft:light_gray_wool" -> "淡灰色羊毛";
+            case "minecraft:cyan_wool" -> "青色羊毛";
+            case "minecraft:purple_wool" -> "紫色羊毛";
+            case "minecraft:blue_wool" -> "蓝色羊毛";
+            case "minecraft:brown_wool" -> "棕色羊毛";
+            case "minecraft:green_wool" -> "绿色羊毛";
+            case "minecraft:red_wool" -> "红色羊毛";
+            case "minecraft:black_wool" -> "黑色羊毛";
+            default -> itemName;
+        };
     }
 
     public static boolean itemMatches(ItemStack stack, String itemName) {
@@ -757,7 +1051,9 @@ public class SmartVillagerData {
                                 warehouseCenter.getZ() + dz
                         );
 
-                        if (!(level.getBlockEntity(mPos) instanceof Container chest)) {
+                        net.minecraft.world.level.block.entity.BlockEntity blockEntity = level.getBlockEntity(mPos);
+
+                        if (!(blockEntity instanceof Container chest) || !isWarehouseStorage(blockEntity)) {
                             continue;
                         }
 
@@ -899,6 +1195,11 @@ public class SmartVillagerData {
         return movedTotal;
     }
 
+    private static boolean isWarehouseStorage(Object blockEntity) {
+        return blockEntity instanceof net.minecraft.world.level.block.entity.ChestBlockEntity
+                || blockEntity instanceof net.minecraft.world.level.block.entity.BarrelBlockEntity;
+    }
+
     private static ItemStack insertStackIntoWarehouse(
             net.minecraft.server.level.ServerLevel level,
             BlockPos warehouseCenter,
@@ -916,7 +1217,9 @@ public class SmartVillagerData {
                             warehouseCenter.getZ() + dz
                     );
 
-                    if (!(level.getBlockEntity(mPos) instanceof Container chest)) {
+                    net.minecraft.world.level.block.entity.BlockEntity blockEntity = level.getBlockEntity(mPos);
+
+                    if (!(blockEntity instanceof Container chest) || !isWarehouseStorage(blockEntity)) {
                         continue;
                     }
 
@@ -1007,7 +1310,9 @@ public class SmartVillagerData {
                             warehouseCenter.getZ() + dz
                     );
 
-                    if (!(level.getBlockEntity(mPos) instanceof Container chest)) {
+                    net.minecraft.world.level.block.entity.BlockEntity blockEntity = level.getBlockEntity(mPos);
+
+                    if (!(blockEntity instanceof Container chest) || !isWarehouseStorage(blockEntity)) {
                         continue;
                     }
 
@@ -1034,12 +1339,21 @@ public class SmartVillagerData {
                 "minecraft:oak_planks",
                 "minecraft:oak_fence",
                 "minecraft:oak_fence_gate",
+                "minecraft:oak_door",
+                "minecraft:white_bed",
                 "minecraft:torch",
                 "minecraft:stick",
                 "minecraft:coal",
                 "minecraft:cobblestone",
                 "minecraft:stone",
-                "minecraft:oak_sapling"
+                "minecraft:oak_sapling",
+                "minecraft:wheat",
+                "minecraft:wheat_seeds",
+                "minecraft:apple",
+                "minecraft:white_wool",
+                "minecraft:black_wool",
+                "minecraft:gray_wool",
+                "minecraft:brown_wool"
         };
 
         StringBuilder builder = new StringBuilder();
@@ -1055,7 +1369,7 @@ public class SmartVillagerData {
                 builder.append("，");
             }
 
-            builder.append(itemName).append(" x").append(count);
+            builder.append(displayItemName(itemName)).append(" x").append(count);
         }
 
         if (builder.length() == 0) {
@@ -1082,7 +1396,9 @@ public class SmartVillagerData {
                             warehouseCenter.getZ() + dz
                     );
 
-                    if (!(level.getBlockEntity(mPos) instanceof Container chest)) {
+                    net.minecraft.world.level.block.entity.BlockEntity blockEntity = level.getBlockEntity(mPos);
+
+                    if (!(blockEntity instanceof Container chest) || !isWarehouseStorage(blockEntity)) {
                         continue;
                     }
 
@@ -1112,7 +1428,7 @@ public class SmartVillagerData {
                 builder.append("，");
             }
 
-            builder.append(entry.getKey()).append(" x").append(entry.getValue());
+            builder.append(displayItemName(entry.getKey())).append(" x").append(entry.getValue());
             shown++;
 
             if (shown >= maxEntries) {
@@ -1150,10 +1466,10 @@ public class SmartVillagerData {
 
         int remaining = countWarehouseItem(level, warehouseCenter, itemName, radius);
 
-        String line = roleDisplayName(getRole(villager))
-                + "/" + getCitizenName(villager)
+        String line = "T" + villager.tickCount
+                + " " + getCitizenName(villager)
                 + " " + action
-                + " " + itemName
+                + " " + displayItemName(itemName)
                 + " x" + moved
                 + "，仓库剩余 x" + remaining;
 
@@ -1166,7 +1482,7 @@ public class SmartVillagerData {
 
         lines.add(0, line);
 
-        while (lines.size() > 8) {
+        while (lines.size() > 20) {
             lines.remove(lines.size() - 1);
         }
 
@@ -1182,8 +1498,51 @@ public class SmartVillagerData {
         player.sendSystemMessage(Component.literal("§e职业：§f" + roleDisplayName(getRole(villager))));
         player.sendSystemMessage(Component.literal("§e状态：§f" + getStatus(villager)));
         player.sendSystemMessage(Component.literal("§e任务：§f" + getTask(villager)));
+        player.sendSystemMessage(Component.literal("§e饥饿：§f" + getHunger(villager) + " / " + HUNGER_MAX));
         player.sendSystemMessage(Component.literal("§e金币：§f" + getCoins(villager) + " §7｜累计收入：" + getTotalEarned(villager) + " ｜累计支出：" + getTotalSpent(villager)));
         player.sendSystemMessage(Component.literal("§e小镇中心：§f" + town.getX() + ", " + town.getY() + ", " + town.getZ()));
         player.sendSystemMessage(Component.literal("§e仓库中心：§f" + warehouse.getX() + ", " + warehouse.getY() + ", " + warehouse.getZ()));
+        player.sendSystemMessage(Component.literal("§e当前位置：§f" + villager.getBlockX() + ", " + villager.getBlockY() + ", " + villager.getBlockZ()));
+        player.sendSystemMessage(Component.literal("§e当前目标：§f" + getTargetText(villager)));
+        player.sendSystemMessage(Component.literal("§e记忆坐标："));
+        player.sendSystemMessage(Component.literal("§7- 家：§f" + memoryText(villager, KEY_MEMORY_HOME_X, KEY_MEMORY_HOME_Y, KEY_MEMORY_HOME_Z)));
+        player.sendSystemMessage(Component.literal("§7- 工作点：§f" + memoryText(villager, KEY_MEMORY_WORK_X, KEY_MEMORY_WORK_Y, KEY_MEMORY_WORK_Z)));
+        player.sendSystemMessage(Component.literal("§7- 食堂：§f" + memoryText(villager, KEY_MEMORY_CANTEEN_X, KEY_MEMORY_CANTEEN_Y, KEY_MEMORY_CANTEEN_Z)));
+        player.sendSystemMessage(Component.literal("§7- 仓库：§f" + warehouse.getX() + ", " + warehouse.getY() + ", " + warehouse.getZ()));
+
+        String uuid = villager.getUUID().toString();
+        Component setWorkHere = Component.literal("§a[把我的当前位置设为他的工作点]")
+                .withStyle(style -> style
+                        .withClickEvent(new ClickEvent.RunCommand(
+                                "/aitown_set_work_here " + uuid
+                        ))
+                        .withHoverEvent(new HoverEvent.ShowText(
+                                Component.literal("点击后，把你当前站的位置记录为 " + getCitizenName(villager) + " 的工作点")
+                        ))
+                );
+        player.sendSystemMessage(setWorkHere);
+
+        player.sendSystemMessage(Component.literal("§e近日记："));
+
+        String diary = getDiary(villager);
+        if ("暂无日记".equals(diary)) {
+            player.sendSystemMessage(Component.literal("§7- 暂无日记"));
+        } else {
+            String[] lines = diary.split("\\n");
+            int shown = 0;
+
+            for (String line : lines) {
+                if (line.isBlank()) {
+                    continue;
+                }
+
+                player.sendSystemMessage(Component.literal("§7- " + line));
+                shown++;
+
+                if (shown >= 6) {
+                    break;
+                }
+            }
+        }
     }
 }

@@ -26,7 +26,6 @@ public class aitown {
     // 模组的 ID
     public static final String MODID = "aitown";
     public static final Logger LOGGER = LogUtils.getLogger();
-
     // 1. 专门用来注册 物品(Items) 的注册器
     public static final DeferredRegister.Items ITEMS = DeferredRegister.createItems(MODID);
 
@@ -40,8 +39,8 @@ public class aitown {
     );
 
     // =========================================================
-    // 【核心修改 2】注册我们自己的创造模式选项卡，并把芯片放进去
-    // =========================================================
+// 【核心修改 2】注册我们自己的创造模式选项卡，并把芯片放进去
+// =========================================================
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> AITOWN_TAB = CREATIVE_MODE_TABS.register("aitown_tab", () -> CreativeModeTab.builder()
             .title(Component.translatable("itemGroup.aitown")) // 选项卡的内部语言名称
             .withTabsBefore(CreativeModeTabs.SPAWN_EGGS)       // 把我们的选项卡放在“刷怪蛋”前面

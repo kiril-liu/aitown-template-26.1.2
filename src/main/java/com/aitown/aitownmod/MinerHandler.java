@@ -44,6 +44,7 @@ public class MinerHandler {
     private static final String KEY_WORK_X = "MinerWorkX";
     private static final String KEY_WORK_Y = "MinerWorkY";
     private static final String KEY_WORK_Z = "MinerWorkZ";
+    private static final String KEY_MINED_SINCE_DIARY = "MinerBlocksSinceDiary";
 
     // 搜索半径保持中等，避免每次扫描过大导致卡顿。
     private static final int STONE_SEARCH_RADIUS = 28;
@@ -74,6 +75,11 @@ public class MinerHandler {
 
         SmartVillagerData.ensureIdentity(villager);
         SmartVillagerData.suppressVanillaMovement(villager);
+        SmartVillagerData.tickHunger(villager);
+
+        if (SmartVillagerData.tryHandleHunger(level, villager)) {
+            return;
+        }
 
         // 轻量拾取：矿工路过自己的掉落物时顺手捡。
         if (SmartVillagerData.shouldThink(villager, 10)) {
@@ -217,6 +223,7 @@ public class MinerHandler {
         boolean destroyed = level.destroyBlock(stonePos, true);
 
         if (destroyed) {
+            addMinedProgress(villager, 1);
             villager.swing(InteractionHand.MAIN_HAND);
 
             level.playSound(
@@ -530,6 +537,17 @@ public class MinerHandler {
         return level.getBlockState(pos).isAir()
                 && level.getBlockState(pos.above()).isAir()
                 && !level.getBlockState(pos.below()).isAir();
+    }
+
+    private static void addMinedProgress(Villager villager, int amount) {
+        int value = villager.getPersistentData().getInt(KEY_MINED_SINCE_DIARY).orElse(0) + amount;
+
+        if (value >= 100) {
+            SmartVillagerData.addDiary(villager, "我已经累计开采了 100 个石材或矿物。");
+            value = 0;
+        }
+
+        villager.getPersistentData().putInt(KEY_MINED_SINCE_DIARY, value);
     }
 
     private static boolean shouldDeposit(Villager villager) {

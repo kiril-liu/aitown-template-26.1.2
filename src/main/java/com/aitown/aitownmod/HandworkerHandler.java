@@ -14,17 +14,18 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.tick.EntityTickEvent;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 手工业者 v4。
+ * 手工业者 v5。
  *
  * 核心原则：
  * 1. 平时待在金块工坊旁边，不在仓库旁边等。
  * 2. 到达工坊并等待一段时间后，才检查仓库成品库存。
  * 3. 仓库缺什么商品，就生产什么商品。
  * 4. 合成前先确认输出物品能放进背包，避免消耗原料后成品消失。
- * 5. 当前负责生产：火把、橡木木板、橡木楼梯、橡木栅栏、橡木栅栏门。
+ * 5. 当前负责生产：火把、橡木木板、橡木楼梯、橡木栅栏、橡木栅栏门、橡木门、白色床。
  */
 @EventBusSubscriber(modid = aitown.MODID)
 public class HandworkerHandler {
@@ -40,6 +41,7 @@ public class HandworkerHandler {
     private static final String KEY_WORKSHOP_X = "HandworkerWorkshopX";
     private static final String KEY_WORKSHOP_Y = "HandworkerWorkshopY";
     private static final String KEY_WORKSHOP_Z = "HandworkerWorkshopZ";
+    private static final String KEY_PRODUCTS_SINCE_DIARY = "HandworkerProductsSinceDiary";
 
     private static final int WORKSHOP_SEARCH_RADIUS = 32;
 
@@ -49,6 +51,8 @@ public class HandworkerHandler {
     private static final int TARGET_STAIR_STOCK = 1;
     private static final int TARGET_FENCE_STOCK = 1;
     private static final int TARGET_FENCE_GATE_STOCK = 1;
+    private static final int TARGET_DOOR_STOCK = 1;
+    private static final int TARGET_BED_STOCK = 1;
 
     // 200 tick 约等于 10 秒，方便观察生产闭环。
     private static final int WORKSHOP_CHECK_INTERVAL_TICKS = 200;
@@ -58,12 +62,34 @@ public class HandworkerHandler {
     private static final int TARGET_COAL = 8;
     private static final int TARGET_OAK_LOGS = 8;
     private static final int TARGET_OAK_PLANKS = 32;
+    private static final int TARGET_WOOL = 3;
 
     private static final int MAX_TORCH_RECIPES_PER_WORK = 4;
     private static final int MAX_PLANK_RECIPES_PER_WORK = 8;
     private static final int MAX_STAIR_RECIPES_PER_WORK = 2;
     private static final int MAX_FENCE_RECIPES_PER_WORK = 4;
     private static final int MAX_FENCE_GATE_RECIPES_PER_WORK = 2;
+    private static final int MAX_DOOR_RECIPES_PER_WORK = 1;
+    private static final int MAX_BED_RECIPES_PER_WORK = 1;
+
+    private static final String[] WOOL_ITEMS = new String[]{
+            "minecraft:white_wool",
+            "minecraft:orange_wool",
+            "minecraft:magenta_wool",
+            "minecraft:light_blue_wool",
+            "minecraft:yellow_wool",
+            "minecraft:lime_wool",
+            "minecraft:pink_wool",
+            "minecraft:gray_wool",
+            "minecraft:light_gray_wool",
+            "minecraft:cyan_wool",
+            "minecraft:purple_wool",
+            "minecraft:blue_wool",
+            "minecraft:brown_wool",
+            "minecraft:green_wool",
+            "minecraft:red_wool",
+            "minecraft:black_wool"
+    };
 
     @SubscribeEvent
     public static void onVillagerTick(EntityTickEvent.Pre event) {
@@ -85,6 +111,11 @@ public class HandworkerHandler {
 
         SmartVillagerData.ensureIdentity(villager);
         SmartVillagerData.suppressVanillaMovement(villager);
+        SmartVillagerData.tickHunger(villager);
+
+        if (SmartVillagerData.tryHandleHunger(level, villager)) {
+            return;
+        }
 
         if (!SmartVillagerData.shouldThink(villager, 10)) {
             return;
@@ -178,12 +209,16 @@ public class HandworkerHandler {
         int stairStock = warehouseItemCount(level, villager, "minecraft:oak_stairs");
         int fenceStock = warehouseItemCount(level, villager, "minecraft:oak_fence");
         int gateStock = warehouseItemCount(level, villager, "minecraft:oak_fence_gate");
+        int doorStock = warehouseItemCount(level, villager, "minecraft:oak_door");
+        int bedStock = warehouseItemCount(level, villager, "minecraft:white_bed");
 
         boolean needsProduction = torchStock < TARGET_TORCH_STOCK
                 || plankStock < TARGET_PLANK_STOCK
                 || stairStock < TARGET_STAIR_STOCK
                 || fenceStock < TARGET_FENCE_STOCK
-                || gateStock < TARGET_FENCE_GATE_STOCK;
+                || gateStock < TARGET_FENCE_GATE_STOCK
+                || doorStock < TARGET_DOOR_STOCK
+                || bedStock < TARGET_BED_STOCK;
 
         if (!needsProduction) {
             SmartVillagerData.setStatus(
@@ -194,6 +229,8 @@ public class HandworkerHandler {
                             + " stairs=" + stairStock
                             + " fence=" + fenceStock
                             + " gate=" + gateStock
+                            + " door=" + doorStock
+                            + " bed=" + bedStock
                             + "，暂不生产"
             );
             return;
@@ -207,6 +244,8 @@ public class HandworkerHandler {
                         + " stairs=" + stairStock
                         + " fence=" + fenceStock
                         + " gate=" + gateStock
+                        + " door=" + doorStock
+                        + " bed=" + bedStock
         );
 
         if (!SmartVillagerData.shouldThink(villager, WORKSHOP_CHECK_INTERVAL_TICKS)) {
@@ -237,6 +276,8 @@ public class HandworkerHandler {
         boolean needStairs = warehouseNeeds(level, villager, "minecraft:oak_stairs", TARGET_STAIR_STOCK);
         boolean needFences = warehouseNeeds(level, villager, "minecraft:oak_fence", TARGET_FENCE_STOCK);
         boolean needFenceGates = warehouseNeeds(level, villager, "minecraft:oak_fence_gate", TARGET_FENCE_GATE_STOCK);
+        boolean needDoors = warehouseNeeds(level, villager, "minecraft:oak_door", TARGET_DOOR_STOCK);
+        boolean needBeds = warehouseNeeds(level, villager, "minecraft:white_bed", TARGET_BED_STOCK);
 
         SmartVillagerData.setStatus(
                 villager,
@@ -246,6 +287,8 @@ public class HandworkerHandler {
                         + " stairs=" + needStairs
                         + " fence=" + needFences
                         + " gate=" + needFenceGates
+                        + " door=" + needDoors
+                        + " bed=" + needBeds
         );
 
         SmartVillagerData.setTargetPlace(villager, warehouse, "handworker_fetch_materials");
@@ -264,7 +307,7 @@ public class HandworkerHandler {
                 level,
                 villager,
                 warehouse,
-                buildMaterialRequests(needTorches, needPlanks, needStairs, needFences, needFenceGates),
+                buildMaterialRequests(needTorches, needPlanks, needStairs, needFences, needFenceGates, needDoors, needBeds),
                 SmartVillagerData.WAREHOUSE_RADIUS
         );
 
@@ -316,7 +359,7 @@ public class HandworkerHandler {
             net.minecraft.server.level.ServerLevel level,
             Villager villager
     ) {
-        SmartVillagerData.setStatus(villager, "手工合成", "制作火把、木板、楼梯、栅栏和栅栏门");
+        SmartVillagerData.setStatus(villager, "手工合成", "制作建筑和生活用品");
 
         SimpleContainer inventory = villager.getInventory();
         boolean needTorches = warehouseNeeds(level, villager, "minecraft:torch", TARGET_TORCH_STOCK);
@@ -324,14 +367,16 @@ public class HandworkerHandler {
         boolean needStairs = warehouseNeeds(level, villager, "minecraft:oak_stairs", TARGET_STAIR_STOCK);
         boolean needFences = warehouseNeeds(level, villager, "minecraft:oak_fence", TARGET_FENCE_STOCK);
         boolean needFenceGates = warehouseNeeds(level, villager, "minecraft:oak_fence_gate", TARGET_FENCE_GATE_STOCK);
+        boolean needDoors = warehouseNeeds(level, villager, "minecraft:oak_door", TARGET_DOOR_STOCK);
+        boolean needBeds = warehouseNeeds(level, villager, "minecraft:white_bed", TARGET_BED_STOCK);
 
         int crafted = 0;
 
-        // 如果要做楼梯 / 栅栏 / 栅栏门，但手上没有足够木板，允许先把原木加工成木板。
+        // 如果要做木制加工件，但手上没有足够木板，允许先把原木加工成木板。
         // 这是中间材料，不要求仓库里也缺木板。
         int helperPlankRecipes = 0;
-        while ((needStairs || needFences || needFenceGates)
-                && SmartVillagerData.countItems(inventory, "minecraft:oak_planks") < requiredHelperPlanks(needStairs, needFences, needFenceGates)
+        while ((needStairs || needFences || needFenceGates || needDoors || needBeds)
+                && SmartVillagerData.countItems(inventory, "minecraft:oak_planks") < requiredHelperPlanks(needStairs, needFences, needFenceGates, needDoors, needBeds)
                 && helperPlankRecipes < MAX_PLANK_RECIPES_PER_WORK
                 && SmartVillagerData.hasItem(inventory, "minecraft:oak_log")) {
             if (!canFullyAdd(inventory, new ItemStack(Items.OAK_PLANKS, 4))) {
@@ -418,9 +463,40 @@ public class HandworkerHandler {
             crafted++;
         }
 
+        int doorRecipes = 0;
+        while (needDoors
+                && doorRecipes < MAX_DOOR_RECIPES_PER_WORK
+                && SmartVillagerData.countItems(inventory, "minecraft:oak_planks") >= 6) {
+            if (!canFullyAdd(inventory, new ItemStack(Items.OAK_DOOR, 3))) {
+                break;
+            }
+
+            consumeMany(inventory, "minecraft:oak_planks", 6);
+            addCraftedItem(inventory, new ItemStack(Items.OAK_DOOR, 3));
+            doorRecipes++;
+            crafted++;
+        }
+
+        int bedRecipes = 0;
+        while (needBeds
+                && bedRecipes < MAX_BED_RECIPES_PER_WORK
+                && SmartVillagerData.countItems(inventory, "minecraft:oak_planks") >= 3
+                && countAnyWool(inventory) >= 3) {
+            if (!canFullyAdd(inventory, new ItemStack(Items.WHITE_BED, 1))) {
+                break;
+            }
+
+            consumeMany(inventory, "minecraft:oak_planks", 3);
+            consumeAnyWool(inventory, 3);
+            addCraftedItem(inventory, new ItemStack(Items.WHITE_BED, 1));
+            bedRecipes++;
+            crafted++;
+        }
+
         inventory.setChanged();
 
         if (crafted > 0) {
+            addProductProgress(villager, countHandworkerProducts(inventory));
             villager.swing(InteractionHand.MAIN_HAND);
             level.playSound(
                     null,
@@ -466,7 +542,9 @@ public class HandworkerHandler {
                         new SmartVillagerData.ItemRequest("minecraft:oak_planks", 999),
                         new SmartVillagerData.ItemRequest("minecraft:oak_stairs", 999),
                         new SmartVillagerData.ItemRequest("minecraft:oak_fence", 999),
-                        new SmartVillagerData.ItemRequest("minecraft:oak_fence_gate", 999)
+                        new SmartVillagerData.ItemRequest("minecraft:oak_fence_gate", 999),
+                        new SmartVillagerData.ItemRequest("minecraft:oak_door", 999),
+                        new SmartVillagerData.ItemRequest("minecraft:white_bed", 999)
                 ),
                 SmartVillagerData.WAREHOUSE_RADIUS
         );
@@ -482,7 +560,9 @@ public class HandworkerHandler {
                 || warehouseNeeds(level, villager, "minecraft:oak_planks", TARGET_PLANK_STOCK)
                 || warehouseNeeds(level, villager, "minecraft:oak_stairs", TARGET_STAIR_STOCK)
                 || warehouseNeeds(level, villager, "minecraft:oak_fence", TARGET_FENCE_STOCK)
-                || warehouseNeeds(level, villager, "minecraft:oak_fence_gate", TARGET_FENCE_GATE_STOCK);
+                || warehouseNeeds(level, villager, "minecraft:oak_fence_gate", TARGET_FENCE_GATE_STOCK)
+                || warehouseNeeds(level, villager, "minecraft:oak_door", TARGET_DOOR_STOCK)
+                || warehouseNeeds(level, villager, "minecraft:white_bed", TARGET_BED_STOCK);
     }
 
     private static boolean canCraftNeededProduct(
@@ -496,6 +576,8 @@ public class HandworkerHandler {
         boolean needStairs = warehouseNeeds(level, villager, "minecraft:oak_stairs", TARGET_STAIR_STOCK);
         boolean needFences = warehouseNeeds(level, villager, "minecraft:oak_fence", TARGET_FENCE_STOCK);
         boolean needFenceGates = warehouseNeeds(level, villager, "minecraft:oak_fence_gate", TARGET_FENCE_GATE_STOCK);
+        boolean needDoors = warehouseNeeds(level, villager, "minecraft:oak_door", TARGET_DOOR_STOCK);
+        boolean needBeds = warehouseNeeds(level, villager, "minecraft:white_bed", TARGET_BED_STOCK);
 
         if (needTorches
                 && SmartVillagerData.hasItem(inventory, "minecraft:stick")
@@ -533,8 +615,30 @@ public class HandworkerHandler {
                 return true;
             }
 
+            if (SmartVillagerData.hasItem(inventory, "minecraft:oak_log")
+                    && SmartVillagerData.countItems(inventory, "minecraft:stick") >= 2) {
+                return true;
+            }
+        }
+
+        if (needDoors) {
+            if (SmartVillagerData.countItems(inventory, "minecraft:oak_planks") >= 6) {
+                return true;
+            }
+
+            if (SmartVillagerData.hasItem(inventory, "minecraft:oak_log")) {
+                return true;
+            }
+        }
+
+        if (needBeds) {
+            if (SmartVillagerData.countItems(inventory, "minecraft:oak_planks") >= 3
+                    && countAnyWool(inventory) >= 3) {
+                return true;
+            }
+
             return SmartVillagerData.hasItem(inventory, "minecraft:oak_log")
-                    && SmartVillagerData.countItems(inventory, "minecraft:stick") >= 2;
+                    && countAnyWool(inventory) >= 3;
         }
 
         return false;
@@ -568,57 +672,68 @@ public class HandworkerHandler {
             boolean needPlanks,
             boolean needStairs,
             boolean needFences,
-            boolean needFenceGates
+            boolean needFenceGates,
+            boolean needDoors,
+            boolean needBeds
     ) {
-        // 火把需要：木棍 + 煤炭。
-        // 木板需要：原木。
-        // 楼梯需要：木板，缺木板时可以拿原木回工坊加工。
-        // 栅栏需要：木板，缺木板时可以拿原木回工坊加工。
-        // 栅栏门需要：木棍 + 木板，缺木板时可以拿原木回工坊加工。
-        if (needTorches && (needPlanks || needStairs || needFences || needFenceGates)) {
-            return List.of(
-                    new SmartVillagerData.ItemRequest("minecraft:stick", TARGET_STICKS),
-                    new SmartVillagerData.ItemRequest("minecraft:coal", TARGET_COAL),
-                    new SmartVillagerData.ItemRequest("minecraft:oak_planks", TARGET_OAK_PLANKS),
-                    new SmartVillagerData.ItemRequest("minecraft:oak_log", TARGET_OAK_LOGS)
-            );
-        }
+        ArrayList<SmartVillagerData.ItemRequest> requests = new ArrayList<>();
 
         if (needTorches) {
-            return List.of(
-                    new SmartVillagerData.ItemRequest("minecraft:stick", TARGET_STICKS),
-                    new SmartVillagerData.ItemRequest("minecraft:coal", TARGET_COAL)
-            );
-        }
-
-        if (needFenceGates && (needPlanks || needStairs || needFences)) {
-            return List.of(
-                    new SmartVillagerData.ItemRequest("minecraft:stick", TARGET_STICKS),
-                    new SmartVillagerData.ItemRequest("minecraft:oak_planks", TARGET_OAK_PLANKS),
-                    new SmartVillagerData.ItemRequest("minecraft:oak_log", TARGET_OAK_LOGS)
-            );
+            requests.add(new SmartVillagerData.ItemRequest("minecraft:stick", TARGET_STICKS));
+            requests.add(new SmartVillagerData.ItemRequest("minecraft:coal", TARGET_COAL));
         }
 
         if (needFenceGates) {
-            return List.of(
-                    new SmartVillagerData.ItemRequest("minecraft:stick", TARGET_STICKS),
-                    new SmartVillagerData.ItemRequest("minecraft:oak_planks", TARGET_OAK_PLANKS),
-                    new SmartVillagerData.ItemRequest("minecraft:oak_log", TARGET_OAK_LOGS)
-            );
+            requests.add(new SmartVillagerData.ItemRequest("minecraft:stick", TARGET_STICKS));
         }
 
-        if (needPlanks || needStairs || needFences) {
-            return List.of(
-                    new SmartVillagerData.ItemRequest("minecraft:oak_planks", TARGET_OAK_PLANKS),
-                    new SmartVillagerData.ItemRequest("minecraft:oak_log", TARGET_OAK_LOGS)
-            );
+        if (needPlanks || needStairs || needFences || needFenceGates || needDoors || needBeds) {
+            requests.add(new SmartVillagerData.ItemRequest("minecraft:oak_planks", TARGET_OAK_PLANKS));
+            requests.add(new SmartVillagerData.ItemRequest("minecraft:oak_log", TARGET_OAK_LOGS));
         }
 
-        return List.of();
+        if (needBeds) {
+            for (String woolItem : WOOL_ITEMS) {
+                requests.add(new SmartVillagerData.ItemRequest(woolItem, TARGET_WOOL));
+            }
+        }
+
+        return requests;
     }
 
-    private static int requiredHelperPlanks(boolean needStairs, boolean needFences, boolean needFenceGates) {
-        if (needStairs) {
+    private static void addProductProgress(Villager villager, int amount) {
+        if (amount <= 0) {
+            return;
+        }
+
+        int value = villager.getPersistentData().getInt(KEY_PRODUCTS_SINCE_DIARY).orElse(0) + amount;
+
+        if (value >= 100) {
+            SmartVillagerData.addDiary(villager, "我已经累计完成了 100 个手工制品。");
+            value = 0;
+        }
+
+        villager.getPersistentData().putInt(KEY_PRODUCTS_SINCE_DIARY, value);
+    }
+
+    private static int countHandworkerProducts(SimpleContainer inventory) {
+        return SmartVillagerData.countItems(inventory, "minecraft:torch")
+                + SmartVillagerData.countItems(inventory, "minecraft:oak_planks")
+                + SmartVillagerData.countItems(inventory, "minecraft:oak_stairs")
+                + SmartVillagerData.countItems(inventory, "minecraft:oak_fence")
+                + SmartVillagerData.countItems(inventory, "minecraft:oak_fence_gate")
+                + SmartVillagerData.countItems(inventory, "minecraft:oak_door")
+                + SmartVillagerData.countItems(inventory, "minecraft:white_bed");
+    }
+
+    private static int requiredHelperPlanks(
+            boolean needStairs,
+            boolean needFences,
+            boolean needFenceGates,
+            boolean needDoors,
+            boolean needBeds
+    ) {
+        if (needStairs || needDoors) {
             return 6;
         }
 
@@ -626,7 +741,36 @@ public class HandworkerHandler {
             return 4;
         }
 
+        if (needBeds) {
+            return 3;
+        }
+
         return 0;
+    }
+
+    private static int countAnyWool(SimpleContainer inventory) {
+        int total = 0;
+
+        for (String woolItem : WOOL_ITEMS) {
+            total += SmartVillagerData.countItems(inventory, woolItem);
+        }
+
+        return total;
+    }
+
+    private static void consumeAnyWool(SimpleContainer inventory, int count) {
+        int remaining = count;
+
+        for (String woolItem : WOOL_ITEMS) {
+            while (remaining > 0 && SmartVillagerData.hasItem(inventory, woolItem)) {
+                SmartVillagerData.consumeOne(inventory, woolItem);
+                remaining--;
+            }
+
+            if (remaining <= 0) {
+                return;
+            }
+        }
     }
 
     private static boolean canFullyAdd(SimpleContainer inventory, ItemStack output) {

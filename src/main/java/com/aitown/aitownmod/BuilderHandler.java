@@ -13,6 +13,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.BedBlock;
 import net.minecraft.world.level.block.DoorBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
@@ -70,6 +71,11 @@ public class BuilderHandler {
 
         SmartVillagerData.ensureIdentity(villager);
         SmartVillagerData.suppressVanillaMovement(villager);
+        SmartVillagerData.tickHunger(villager);
+
+        if (SmartVillagerData.tryHandleHunger(level, villager)) {
+            return;
+        }
 
         if (!SmartVillagerData.shouldThink(villager, 10)) {
             return;
@@ -334,6 +340,36 @@ public class BuilderHandler {
                 continue;
             }
 
+            if (required.getBlock() instanceof DoorBlock) {
+                if (!SmartVillagerData.canPlaceBlockSafely(level, villager, targetPos.above())) {
+                    SmartVillagerData.setStatus(
+                            villager,
+                            "施工等待",
+                            "DEBUG 门上半部分不可放置 target=" + posText(targetPos.above())
+                    );
+                    continue;
+                }
+            }
+
+            if (required.getBlock() instanceof BedBlock) {
+                Direction bedFacing = Direction.SOUTH;
+
+                if (required.hasProperty(BlockStateProperties.HORIZONTAL_FACING)) {
+                    bedFacing = required.getValue(BlockStateProperties.HORIZONTAL_FACING);
+                }
+
+                BlockPos bedHeadPos = targetPos.relative(bedFacing);
+
+                if (!SmartVillagerData.canPlaceBlockSafely(level, villager, bedHeadPos)) {
+                    SmartVillagerData.setStatus(
+                            villager,
+                            "施工等待",
+                            "DEBUG 床头位置不可放置 target=" + posText(bedHeadPos)
+                    );
+                    continue;
+                }
+            }
+
             if (!consumeOneItem(villager.getInventory(), requiredItem)) {
                 // 先尝试用石材加工。
                 // 例如：圆石 -> 圆石楼梯 / 圆石台阶 / 圆石墙。
@@ -358,7 +394,17 @@ public class BuilderHandler {
                 return;
             }
 
-            if (level.setBlockAndUpdate(targetPos, required)) {
+            boolean placedBlock;
+
+            if (required.getBlock() instanceof DoorBlock) {
+                placedBlock = placeDoor(level, targetPos, required);
+            } else if (required.getBlock() instanceof BedBlock) {
+                placedBlock = placeBed(level, targetPos, required);
+            } else {
+                placedBlock = level.setBlockAndUpdate(targetPos, required);
+            }
+
+            if (placedBlock) {
                 placed++;
 
                 villager.swing(InteractionHand.MAIN_HAND);
@@ -380,6 +426,7 @@ public class BuilderHandler {
 
         if (finished) {
             SmartVillagerData.setStatus(villager, "房屋完成", "寻找下一块建造空地");
+            SmartVillagerData.addDiary(villager, "我完成了一栋房子的建造。");
 
             clearPos(villager, KEY_BUILD_X, KEY_BUILD_Y, KEY_BUILD_Z);
             clearPos(villager, KEY_DOOR_X, KEY_DOOR_Y, KEY_DOOR_Z);
@@ -545,15 +592,26 @@ public class BuilderHandler {
 
         String blockName = BuiltInRegistries.BLOCK.getKey(originalState.getBlock()).getPath();
 
-        // 门是双格方块，当前阶段仍然转成单格橡木栅栏门。
-        // 上半部分跳过，避免重复建造。
+        // 门是双格方块，现在保留为橡木门。
+        // 上半部分跳过，由下半部分放置时一起补上。
         if (originalState.getBlock() instanceof DoorBlock) {
             if (originalState.hasProperty(DoorBlock.HALF)
                     && originalState.getValue(DoorBlock.HALF) == DoubleBlockHalf.UPPER) {
                 return null;
             }
 
-            return copyCommonProperties(originalState, Blocks.OAK_FENCE_GATE.defaultBlockState());
+            return copyCommonProperties(originalState, Blocks.OAK_DOOR.defaultBlockState());
+        }
+
+        // 床是双格方块，现在保留为白色床。
+        // 只处理脚部方块，放置时一次性补上床头，避免消耗两张床。
+        if (blockName.contains("bed")) {
+            if (originalState.hasProperty(BlockStateProperties.BED_PART)
+                    && originalState.getValue(BlockStateProperties.BED_PART) == net.minecraft.world.level.block.state.properties.BedPart.HEAD) {
+                return null;
+            }
+
+            return copyCommonProperties(originalState, Blocks.WHITE_BED.defaultBlockState());
         }
 
         // 暂时跳过复杂装饰和容器。
@@ -565,7 +623,6 @@ public class BuilderHandler {
                 || blockName.contains("candle")
                 || blockName.contains("flower_pot")
                 || blockName.contains("bell")
-                || blockName.contains("bed")
                 || blockName.contains("chest")
                 || blockName.contains("barrel")) {
             return null;
@@ -703,7 +760,65 @@ public class BuilderHandler {
             to = to.setValue(BlockStateProperties.OPEN, from.getValue(BlockStateProperties.OPEN));
         }
 
+        if (from.hasProperty(BlockStateProperties.BED_PART)
+                && to.hasProperty(BlockStateProperties.BED_PART)) {
+            to = to.setValue(BlockStateProperties.BED_PART, from.getValue(BlockStateProperties.BED_PART));
+        }
+
         return to;
+    }
+
+    private static boolean placeDoor(
+            net.minecraft.server.level.ServerLevel level,
+            BlockPos lowerPos,
+            BlockState lowerState
+    ) {
+        BlockState bottom = lowerState;
+
+        if (bottom.hasProperty(DoorBlock.HALF)) {
+            bottom = bottom.setValue(DoorBlock.HALF, DoubleBlockHalf.LOWER);
+        }
+
+        BlockState top = bottom;
+
+        if (top.hasProperty(DoorBlock.HALF)) {
+            top = top.setValue(DoorBlock.HALF, DoubleBlockHalf.UPPER);
+        }
+
+        boolean placedBottom = level.setBlockAndUpdate(lowerPos, bottom);
+        boolean placedTop = level.setBlockAndUpdate(lowerPos.above(), top);
+
+        return placedBottom && placedTop;
+    }
+
+    private static boolean placeBed(
+            net.minecraft.server.level.ServerLevel level,
+            BlockPos footPos,
+            BlockState footState
+    ) {
+        Direction facing = Direction.SOUTH;
+
+        if (footState.hasProperty(BlockStateProperties.HORIZONTAL_FACING)) {
+            facing = footState.getValue(BlockStateProperties.HORIZONTAL_FACING);
+        }
+
+        BlockPos headPos = footPos.relative(facing);
+        BlockState foot = footState;
+
+        if (foot.hasProperty(BlockStateProperties.BED_PART)) {
+            foot = foot.setValue(BlockStateProperties.BED_PART, net.minecraft.world.level.block.state.properties.BedPart.FOOT);
+        }
+
+        BlockState head = foot;
+
+        if (head.hasProperty(BlockStateProperties.BED_PART)) {
+            head = head.setValue(BlockStateProperties.BED_PART, net.minecraft.world.level.block.state.properties.BedPart.HEAD);
+        }
+
+        boolean placedFoot = level.setBlockAndUpdate(footPos, foot);
+        boolean placedHead = level.setBlockAndUpdate(headPos, head);
+
+        return placedFoot && placedHead;
     }
 
     private static boolean tryCraftFromCobblestone(Villager villager, Item requiredItem) {

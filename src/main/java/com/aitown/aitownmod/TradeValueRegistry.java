@@ -60,6 +60,11 @@ public class TradeValueRegistry {
         // 手工业者产物
         // =========================================================
         register("minecraft:oak_planks", 1);
+        register("minecraft:oak_stairs", 2);
+        register("minecraft:oak_fence", 2);
+        register("minecraft:oak_fence_gate", 3);
+        register("minecraft:oak_door", 4);
+        register("minecraft:white_bed", 20);
         register("minecraft:torch", 3);
 
         // =========================================================
@@ -96,6 +101,26 @@ public class TradeValueRegistry {
         register("minecraft:beetroot", 2);
         register("minecraft:bread", 6);
         register("minecraft:baked_potato", 5);
+
+        // =========================================================
+        // 畜牧系统产物
+        // =========================================================
+        register("minecraft:white_wool", 5);
+        register("minecraft:orange_wool", 5);
+        register("minecraft:magenta_wool", 5);
+        register("minecraft:light_blue_wool", 5);
+        register("minecraft:yellow_wool", 5);
+        register("minecraft:lime_wool", 5);
+        register("minecraft:pink_wool", 5);
+        register("minecraft:gray_wool", 5);
+        register("minecraft:light_gray_wool", 5);
+        register("minecraft:cyan_wool", 5);
+        register("minecraft:purple_wool", 5);
+        register("minecraft:blue_wool", 5);
+        register("minecraft:brown_wool", 5);
+        register("minecraft:green_wool", 5);
+        register("minecraft:red_wool", 5);
+        register("minecraft:black_wool", 5);
     }
 
     private static void register(String itemName, int value) {

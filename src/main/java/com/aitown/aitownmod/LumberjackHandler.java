@@ -38,6 +38,7 @@ public class LumberjackHandler {
     private static final String KEY_WORK_X = "LumberjackWorkX";
     private static final String KEY_WORK_Y = "LumberjackWorkY";
     private static final String KEY_WORK_Z = "LumberjackWorkZ";
+    private static final String KEY_TREES_SINCE_DIARY = "LumberjackTreesSinceDiary";
 
     private static final int TREE_SEARCH_RADIUS = 24;
     private static final int MAX_LOGS_PER_STEP = 1;
@@ -64,6 +65,11 @@ public class LumberjackHandler {
 
         SmartVillagerData.ensureIdentity(villager);
         SmartVillagerData.suppressVanillaMovement(villager);
+        SmartVillagerData.tickHunger(villager);
+
+        if (SmartVillagerData.tryHandleHunger(level, villager)) {
+            return;
+        }
 
         if (SmartVillagerData.shouldThink(villager, 10)) {
             pickupDrops(level, villager, villager.blockPosition(), 2.5D, 1.5D);
@@ -196,6 +202,7 @@ public class LumberjackHandler {
             return;
         }
 
+        addTreeProgress(villager, 1);
         setState(villager, STATE_CLEAN_DROPS);
     }
 
@@ -393,6 +400,17 @@ public class LumberjackHandler {
         }
 
         return broken;
+    }
+
+    private static void addTreeProgress(Villager villager, int amount) {
+        int value = villager.getPersistentData().getInt(KEY_TREES_SINCE_DIARY).orElse(0) + amount;
+
+        if (value >= 10) {
+            SmartVillagerData.addDiary(villager, "我已经累计砍完了 10 棵树，并整理了伐木产物。");
+            value = 0;
+        }
+
+        villager.getPersistentData().putInt(KEY_TREES_SINCE_DIARY, value);
     }
 
     private static BlockPos findNearestRealTree(
