@@ -4,7 +4,6 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
-import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Blocks;
@@ -55,28 +54,15 @@ public class FarmerHandler {
 
     @SubscribeEvent
     public static void onVillagerTick(EntityTickEvent.Pre event) {
-        if (event.getEntity().level().isClientSide()) {
+        net.minecraft.server.level.ServerLevel level =
+                VillagerJobHelper.beginJobTick(event, SmartVillagerData.ROLE_FARMER);
+        if (level == null) {
             return;
         }
-
-        if (!(event.getEntity() instanceof Villager villager)) {
-            return;
-        }
-
-        if (!SmartVillagerData.isRole(villager, SmartVillagerData.ROLE_FARMER)) {
-            return;
-        }
-
-        if (!(villager.level() instanceof net.minecraft.server.level.ServerLevel level)) {
-            return;
-        }
-
-        SmartVillagerData.ensureIdentity(villager);
-        SmartVillagerData.suppressVanillaMovement(villager);
+        Villager villager = (Villager) event.getEntity();
         ensureFieldCenter(villager);
 
-        SmartVillagerData.tickHunger(villager);
-        if (SmartVillagerData.tryHandleHunger(level, villager)) {
+        if (TownSystem.tickLifeNeeds(level, villager)) {
             return;
         }
 
@@ -466,7 +452,7 @@ public class FarmerHandler {
 
         BlockPos warehouse = SmartVillagerData.getWarehouseCenter(villager);
 
-        SmartVillagerData.setStatus(villager, "存入小麦", "把收获的小麦送回仓库，种子继续留作补种");
+        SmartVillagerData.setStatus(villager, "存入小麦", "把���获的小麦送回仓库，种子继续留��补种");
         SmartVillagerData.setTargetPlace(villager, warehouse, "farmer_deposit_wheat");
 
         boolean arrived = SmartVillagerData.moveToTargetPlace(
@@ -502,6 +488,8 @@ public class FarmerHandler {
                 SmartVillagerData.PLACE_WORK,
                 SmartVillagerData.SPEED_SLOW
         );
+
+        TownSystem.tryIdleTalk(level, villager, "我刚才巡视了农田，现在正在等小麦成熟。");
 
         if (!SmartVillagerData.shouldThink(villager, 40)) {
             return;
@@ -749,49 +737,28 @@ public class FarmerHandler {
     }
 
     private static void addWheatProgress(Villager villager, int amount) {
-        if (amount <= 0) {
-            return;
-        }
-
-        int value = villager.getPersistentData().getInt(KEY_WHEAT_SINCE_DIARY).orElse(0) + amount;
-
-        if (value >= WHEAT_DIARY_STEP) {
-            SmartVillagerData.addDiary(villager, "我已经累计收获并上交了 30 个小麦。");
-            value = 0;
-        }
-
-        villager.getPersistentData().putInt(KEY_WHEAT_SINCE_DIARY, value);
+        VillagerJobHelper.addDiaryProgress(villager, KEY_WHEAT_SINCE_DIARY, amount, WHEAT_DIARY_STEP,
+                "我已经累计收获并上交了 30 个小麦。");
     }
 
+    // 目标坐标/状态样板统一委托给 VillagerJobHelper（本职业只有一个固定目标点）。
     private static void saveTarget(Villager villager, BlockPos pos) {
-        villager.getPersistentData().putInt(KEY_TARGET_X, pos.getX());
-        villager.getPersistentData().putInt(KEY_TARGET_Y, pos.getY());
-        villager.getPersistentData().putInt(KEY_TARGET_Z, pos.getZ());
+        VillagerJobHelper.savePos(villager, KEY_TARGET_X, KEY_TARGET_Y, KEY_TARGET_Z, pos);
     }
 
     private static BlockPos readTarget(Villager villager) {
-        if (!villager.getPersistentData().contains(KEY_TARGET_X)) {
-            return null;
-        }
-
-        return new BlockPos(
-                villager.getPersistentData().getInt(KEY_TARGET_X).orElse(0),
-                villager.getPersistentData().getInt(KEY_TARGET_Y).orElse(0),
-                villager.getPersistentData().getInt(KEY_TARGET_Z).orElse(0)
-        );
+        return VillagerJobHelper.readPos(villager, KEY_TARGET_X, KEY_TARGET_Y, KEY_TARGET_Z);
     }
 
     private static void clearTarget(Villager villager) {
-        villager.getPersistentData().remove(KEY_TARGET_X);
-        villager.getPersistentData().remove(KEY_TARGET_Y);
-        villager.getPersistentData().remove(KEY_TARGET_Z);
+        VillagerJobHelper.clearPos(villager, KEY_TARGET_X, KEY_TARGET_Y, KEY_TARGET_Z);
     }
 
     private static String getState(Villager villager) {
-        return villager.getPersistentData().getString(KEY_STATE).orElse(STATE_PATROL_FIELD);
+        return VillagerJobHelper.getState(villager, KEY_STATE, STATE_PATROL_FIELD);
     }
 
     private static void setState(Villager villager, String state) {
-        villager.getPersistentData().putString(KEY_STATE, state);
+        VillagerJobHelper.setState(villager, KEY_STATE, state);
     }
 }

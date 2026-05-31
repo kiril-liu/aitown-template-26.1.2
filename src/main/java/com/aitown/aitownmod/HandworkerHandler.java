@@ -93,27 +93,13 @@ public class HandworkerHandler {
 
     @SubscribeEvent
     public static void onVillagerTick(EntityTickEvent.Pre event) {
-        if (event.getEntity().level().isClientSide()) {
+        net.minecraft.server.level.ServerLevel level =
+                VillagerJobHelper.beginJobTick(event, SmartVillagerData.ROLE_HANDWORKER);
+        if (level == null) {
             return;
         }
-
-        if (!(event.getEntity() instanceof Villager villager)) {
-            return;
-        }
-
-        if (!SmartVillagerData.isRole(villager, SmartVillagerData.ROLE_HANDWORKER)) {
-            return;
-        }
-
-        if (!(villager.level() instanceof net.minecraft.server.level.ServerLevel level)) {
-            return;
-        }
-
-        SmartVillagerData.ensureIdentity(villager);
-        SmartVillagerData.suppressVanillaMovement(villager);
-        SmartVillagerData.tickHunger(villager);
-
-        if (SmartVillagerData.tryHandleHunger(level, villager)) {
+        Villager villager = (Villager) event.getEntity();
+        if (TownSystem.tickLifeNeeds(level, villager)) {
             return;
         }
 
@@ -233,6 +219,7 @@ public class HandworkerHandler {
                             + " bed=" + bedStock
                             + "，暂不生产"
             );
+            TownSystem.tryIdleTalk(level, villager, "我刚才检查了工坊库存，仓库里的手工商品暂时够用，所以我在工坊旁边待命。");
             return;
         }
 
@@ -247,10 +234,6 @@ public class HandworkerHandler {
                         + " door=" + doorStock
                         + " bed=" + bedStock
         );
-
-        if (!SmartVillagerData.shouldThink(villager, WORKSHOP_CHECK_INTERVAL_TICKS)) {
-            return;
-        }
 
         setState(villager, STATE_FETCH_MATERIALS);
     }
@@ -702,18 +685,8 @@ public class HandworkerHandler {
     }
 
     private static void addProductProgress(Villager villager, int amount) {
-        if (amount <= 0) {
-            return;
-        }
-
-        int value = villager.getPersistentData().getInt(KEY_PRODUCTS_SINCE_DIARY).orElse(0) + amount;
-
-        if (value >= 100) {
-            SmartVillagerData.addDiary(villager, "我已经累计完成了 100 个手工制品。");
-            value = 0;
-        }
-
-        villager.getPersistentData().putInt(KEY_PRODUCTS_SINCE_DIARY, value);
+        VillagerJobHelper.addDiaryProgress(villager, KEY_PRODUCTS_SINCE_DIARY, amount, 100,
+                "我已经累计完成了 100 个手工制品。");
     }
 
     private static int countHandworkerProducts(SimpleContainer inventory) {
@@ -874,29 +847,20 @@ public class HandworkerHandler {
                 && !level.getBlockState(pos.below()).isAir();
     }
 
+    // 工作台坐标/状态样板统一委托给 VillagerJobHelper。
     private static void savePos(Villager villager, BlockPos pos) {
-        villager.getPersistentData().putInt(KEY_WORKSHOP_X, pos.getX());
-        villager.getPersistentData().putInt(KEY_WORKSHOP_Y, pos.getY());
-        villager.getPersistentData().putInt(KEY_WORKSHOP_Z, pos.getZ());
+        VillagerJobHelper.savePos(villager, KEY_WORKSHOP_X, KEY_WORKSHOP_Y, KEY_WORKSHOP_Z, pos);
     }
 
     private static BlockPos readWorkshop(Villager villager) {
-        if (!villager.getPersistentData().contains(KEY_WORKSHOP_X)) {
-            return null;
-        }
-
-        return new BlockPos(
-                villager.getPersistentData().getInt(KEY_WORKSHOP_X).orElse(0),
-                villager.getPersistentData().getInt(KEY_WORKSHOP_Y).orElse(0),
-                villager.getPersistentData().getInt(KEY_WORKSHOP_Z).orElse(0)
-        );
+        return VillagerJobHelper.readPos(villager, KEY_WORKSHOP_X, KEY_WORKSHOP_Y, KEY_WORKSHOP_Z);
     }
 
     private static String getState(Villager villager) {
-        return villager.getPersistentData().getString(KEY_STATE).orElse(STATE_SEEK_WORKSHOP);
+        return VillagerJobHelper.getState(villager, KEY_STATE, STATE_SEEK_WORKSHOP);
     }
 
     private static void setState(Villager villager, String state) {
-        villager.getPersistentData().putString(KEY_STATE, state);
+        VillagerJobHelper.setState(villager, KEY_STATE, state);
     }
 }

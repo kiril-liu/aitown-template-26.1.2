@@ -57,27 +57,13 @@ public class MinerHandler {
 
     @SubscribeEvent
     public static void onVillagerTick(EntityTickEvent.Pre event) {
-        if (event.getEntity().level().isClientSide()) {
+        net.minecraft.server.level.ServerLevel level =
+                VillagerJobHelper.beginJobTick(event, SmartVillagerData.ROLE_MINER);
+        if (level == null) {
             return;
         }
-
-        if (!(event.getEntity() instanceof Villager villager)) {
-            return;
-        }
-
-        if (!SmartVillagerData.isRole(villager, SmartVillagerData.ROLE_MINER)) {
-            return;
-        }
-
-        if (!(villager.level() instanceof net.minecraft.server.level.ServerLevel level)) {
-            return;
-        }
-
-        SmartVillagerData.ensureIdentity(villager);
-        SmartVillagerData.suppressVanillaMovement(villager);
-        SmartVillagerData.tickHunger(villager);
-
-        if (SmartVillagerData.tryHandleHunger(level, villager)) {
+        Villager villager = (Villager) event.getEntity();
+        if (TownSystem.tickLifeNeeds(level, villager)) {
             return;
         }
 
@@ -540,14 +526,8 @@ public class MinerHandler {
     }
 
     private static void addMinedProgress(Villager villager, int amount) {
-        int value = villager.getPersistentData().getInt(KEY_MINED_SINCE_DIARY).orElse(0) + amount;
-
-        if (value >= 100) {
-            SmartVillagerData.addDiary(villager, "我已经累计开采了 100 个石材或矿物。");
-            value = 0;
-        }
-
-        villager.getPersistentData().putInt(KEY_MINED_SINCE_DIARY, value);
+        VillagerJobHelper.addDiaryProgress(villager, KEY_MINED_SINCE_DIARY, amount, 100,
+                "我已经累计开采了 100 个石材或矿物。");
     }
 
     private static boolean shouldDeposit(Villager villager) {
@@ -596,54 +576,26 @@ public class MinerHandler {
                 || itemName.equals("minecraft:coal");
     }
 
+    // 状态/坐标样板统一委托给 VillagerJobHelper，仅保留本职业的默认状态与键名。
     private static String getState(Villager villager) {
-        return villager.getPersistentData().getString(KEY_STATE).orElse(STATE_SEEK_STONE);
+        return VillagerJobHelper.getState(villager, KEY_STATE, STATE_SEEK_STONE);
     }
 
     private static void setState(Villager villager, String state) {
-        villager.getPersistentData().putString(KEY_STATE, state);
+        VillagerJobHelper.setState(villager, KEY_STATE, state);
     }
 
-    private static void savePos(
-            Villager villager,
-            String keyX,
-            String keyY,
-            String keyZ,
-            BlockPos pos
-    ) {
-        villager.getPersistentData().putInt(keyX, pos.getX());
-        villager.getPersistentData().putInt(keyY, pos.getY());
-        villager.getPersistentData().putInt(keyZ, pos.getZ());
+    private static void savePos(Villager villager, String keyX, String keyY, String keyZ, BlockPos pos) {
+        VillagerJobHelper.savePos(villager, keyX, keyY, keyZ, pos);
     }
 
-    private static BlockPos readPos(
-            Villager villager,
-            String keyX,
-            String keyY,
-            String keyZ
-    ) {
-        if (!villager.getPersistentData().contains(keyX)
-                || !villager.getPersistentData().contains(keyY)
-                || !villager.getPersistentData().contains(keyZ)) {
-            return null;
-        }
-
-        return new BlockPos(
-                villager.getPersistentData().getInt(keyX).orElse(0),
-                villager.getPersistentData().getInt(keyY).orElse(0),
-                villager.getPersistentData().getInt(keyZ).orElse(0)
-        );
+    private static BlockPos readPos(Villager villager, String keyX, String keyY, String keyZ) {
+        return VillagerJobHelper.readPos(villager, keyX, keyY, keyZ);
     }
 
     private static void clearMiningTarget(Villager villager) {
-        villager.getPersistentData().remove(KEY_STONE_X);
-        villager.getPersistentData().remove(KEY_STONE_Y);
-        villager.getPersistentData().remove(KEY_STONE_Z);
-
-        villager.getPersistentData().remove(KEY_WORK_X);
-        villager.getPersistentData().remove(KEY_WORK_Y);
-        villager.getPersistentData().remove(KEY_WORK_Z);
-
+        VillagerJobHelper.clearPos(villager, KEY_STONE_X, KEY_STONE_Y, KEY_STONE_Z);
+        VillagerJobHelper.clearPos(villager, KEY_WORK_X, KEY_WORK_Y, KEY_WORK_Z);
         SmartVillagerData.clearTargetPlace(villager);
     }
 }

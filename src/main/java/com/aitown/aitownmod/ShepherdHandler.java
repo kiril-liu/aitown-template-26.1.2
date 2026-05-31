@@ -64,28 +64,15 @@ public class ShepherdHandler {
 
     @SubscribeEvent
     public static void onVillagerTick(EntityTickEvent.Pre event) {
-        if (event.getEntity().level().isClientSide()) {
+        net.minecraft.server.level.ServerLevel level =
+                VillagerJobHelper.beginJobTick(event, SmartVillagerData.ROLE_SHEPHERD);
+        if (level == null) {
             return;
         }
-
-        if (!(event.getEntity() instanceof Villager villager)) {
-            return;
-        }
-
-        if (!SmartVillagerData.isRole(villager, SmartVillagerData.ROLE_SHEPHERD)) {
-            return;
-        }
-
-        if (!(villager.level() instanceof net.minecraft.server.level.ServerLevel level)) {
-            return;
-        }
-
-        SmartVillagerData.ensureIdentity(villager);
-        SmartVillagerData.suppressVanillaMovement(villager);
+        Villager villager = (Villager) event.getEntity();
         ensurePastureCenter(villager);
 
-        SmartVillagerData.tickHunger(villager);
-        if (SmartVillagerData.tryHandleHunger(level, villager)) {
+        if (TownSystem.tickLifeNeeds(level, villager)) {
             return;
         }
 
@@ -382,6 +369,8 @@ public class ShepherdHandler {
             return;
         }
 
+        TownSystem.tryIdleTalk(level, villager, "我刚才巡视了牧场，正在等羊重新长出羊毛。");
+
         if (SmartVillagerData.shouldThink(villager, 80)) {
             setState(villager, STATE_FIND_SHEEP);
         }
@@ -486,6 +475,8 @@ public class ShepherdHandler {
         SmartVillagerData.setStatus(villager, "等待羊毛", "牧场暂时没有可以剪毛的羊");
         SmartVillagerData.setTargetPlace(villager, center, "shepherd_wait");
         SmartVillagerData.moveToTargetPlace(villager, SmartVillagerData.PLACE_WORK, SmartVillagerData.SPEED_SLOW);
+
+        TownSystem.tryIdleTalk(level, villager, "我刚才剪了羊毛，也照看了一下牧场里的羊。");
 
         if (SmartVillagerData.shouldThink(villager, 80)) {
             setState(villager, STATE_FIND_SHEEP);
@@ -686,25 +677,16 @@ public class ShepherdHandler {
     }
 
     private static void addWoolProgress(Villager villager, int amount) {
-        if (amount <= 0) {
-            return;
-        }
-
-        int value = villager.getPersistentData().getInt(KEY_WOOL_SINCE_DIARY).orElse(0) + amount;
-
-        if (value >= WOOL_DIARY_STEP) {
-            SmartVillagerData.addDiary(villager, "我已经累计剪下并上交了 16 个羊毛。");
-            value = 0;
-        }
-
-        villager.getPersistentData().putInt(KEY_WOOL_SINCE_DIARY, value);
+        VillagerJobHelper.addDiaryProgress(villager, KEY_WOOL_SINCE_DIARY, amount, WOOL_DIARY_STEP,
+                "我已经累计剪下并上交了 16 个羊毛。");
     }
 
+    // 状态样板统一委托给 VillagerJobHelper。
     private static String getState(Villager villager) {
-        return villager.getPersistentData().getString(KEY_STATE).orElse(STATE_CHECK_PASTURE);
+        return VillagerJobHelper.getState(villager, KEY_STATE, STATE_CHECK_PASTURE);
     }
 
     private static void setState(Villager villager, String state) {
-        villager.getPersistentData().putString(KEY_STATE, state);
+        VillagerJobHelper.setState(villager, KEY_STATE, state);
     }
 }

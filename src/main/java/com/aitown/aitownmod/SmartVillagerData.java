@@ -9,7 +9,11 @@ import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.Container;
 import net.minecraft.world.SimpleContainer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.decoration.ArmorStand;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.item.ItemStack;
@@ -27,6 +31,7 @@ public class SmartVillagerData {
     public static final String ROLE_HANDWORKER = "handworker";
     public static final String ROLE_FARMER = "farmer";
     public static final String ROLE_SHEPHERD = "shepherd";
+    public static final String ROLE_RESIDENT = "resident";
     public static final String KEY_PLAYER_TOWN_VILLAGERS = "TownSmartVillagerIds";
     public static final String KEY_NAME = "CitizenName";
     public static final String KEY_ID = "CitizenId";
@@ -41,12 +46,36 @@ public class SmartVillagerData {
 
     public static final String KEY_HUNGER = "AITownHunger";
     public static final String KEY_LAST_HUNGER_TICK = "AITownLastHungerTick";
+    public static final String KEY_MOOD = "AITownMood";
+    public static final String KEY_LAST_MOOD_TICK = "AITownLastMoodTick";
     public static final String KEY_DIARY = "AITownDiary";
+    public static final String KEY_HOME_HOUSE_ID = "HomeHouseId";
+    public static final String KEY_HOME_BED_X = "HomeBedX";
+    public static final String KEY_HOME_BED_Y = "HomeBedY";
+    public static final String KEY_HOME_BED_Z = "HomeBedZ";
+    public static final String KEY_LAST_TALK_TICK = "LastTalkTick";
+    public static final String KEY_IS_TALKING = "IsTalking";
+    public static final String KEY_TALKING_WITH_UUID = "TalkingWithUuid";
+    public static final String KEY_TALK_END_TICK = "TalkEndTick";
+    public static final String KEY_TALK_TOPIC = "TalkTopic";
+    public static final String KEY_TALK_TARGET_UUID = "TalkTargetUuid";
+    public static final String KEY_TALK_BUBBLE_UUID = "TalkBubbleUuid";
+    public static final String KEY_TALK_BUBBLE_TEXT = "TalkBubbleText";
 
     public static final int HUNGER_MAX = 100;
     public static final int HUNGER_INTERRUPT = 80;
     public static final int HUNGER_EAT_RECOVER = 30;
     public static final int HUNGER_TICK_INTERVAL = 600;
+
+    // 心情（MOOD）：随时间缓慢下降，社交可回升；降到阈值就想找人聊天。
+    public static final int MOOD_MAX = 100;
+    public static final int MOOD_TALK_THRESHOLD = 50;
+    public static final int MOOD_TALK_RECOVER = 60;
+    public static final int MOOD_TICK_INTERVAL = 20;
+
+    // 向小镇（仓库）购买一个苹果的金币价格。
+    public static final int APPLE_PRICE = 5;
+
     public static final int DIARY_MAX_LINES = 20;
 
     public static final String KEY_TOWN_X = "TownCenterX";
@@ -110,6 +139,12 @@ public class SmartVillagerData {
         if (!villager.getPersistentData().contains(KEY_ID)) {
             String uuid = villager.getUUID().toString().replace("-", "");
             villager.getPersistentData().putString(KEY_ID, "AIT-" + uuid.substring(0, 6).toUpperCase());
+        }
+
+        // 第一版小镇经济：每个新智能居民初始 100 金币。
+        // 已有村民不会被覆盖。
+        if (!villager.getPersistentData().contains(KEY_COINS)) {
+            villager.getPersistentData().putInt(KEY_COINS, 100);
         }
     }
 
@@ -327,6 +362,10 @@ public class SmartVillagerData {
             return "牧羊工";
         }
 
+        if (ROLE_RESIDENT.equals(role)) {
+            return "居民";
+        }
+
         return "未分配";
     }
 
@@ -342,6 +381,7 @@ public class SmartVillagerData {
         villager.getPersistentData().putBoolean("IsHandworker", ROLE_HANDWORKER.equals(role));
         villager.getPersistentData().putBoolean("IsFarmer", ROLE_FARMER.equals(role));
         villager.getPersistentData().putBoolean("IsShepherd", ROLE_SHEPHERD.equals(role));
+        villager.getPersistentData().putBoolean("IsResident", ROLE_RESIDENT.equals(role));
 
         setStatus(villager, "待命", "等待小镇任务");
     }
@@ -408,6 +448,47 @@ public class SmartVillagerData {
         }
     }
 
+    public static int getMood(Villager villager) {
+        return clamp(villager.getPersistentData().getInt(KEY_MOOD).orElse(MOOD_MAX), 0, MOOD_MAX);
+    }
+
+    public static void setMood(Villager villager, int value) {
+        villager.getPersistentData().putInt(KEY_MOOD, clamp(value, 0, MOOD_MAX));
+    }
+
+    public static void addMood(Villager villager, int amount) {
+        if (amount == 0) {
+            return;
+        }
+
+        setMood(villager, getMood(villager) + amount);
+    }
+
+    public static void reduceMood(Villager villager, int amount) {
+        if (amount <= 0) {
+            return;
+        }
+
+        setMood(villager, getMood(villager) - amount);
+    }
+
+    /**
+     * 心情随时间缓慢下降；社交可让心情回升。
+     * 刚跌到阈值时记一笔日记，触发"想找人聊天"的需求。
+     */
+    public static void tickMood(Villager villager) {
+        if (!shouldThink(villager, MOOD_TICK_INTERVAL)) {
+            return;
+        }
+
+        int oldMood = getMood(villager);
+        reduceMood(villager, 1);
+
+        if (oldMood > MOOD_TALK_THRESHOLD && getMood(villager) <= MOOD_TALK_THRESHOLD) {
+            addDiary(villager, "我有点孤单，想找人聊聊天。");
+        }
+    }
+
     /**
      * 饥饿中断逻辑。
      *
@@ -429,8 +510,13 @@ public class SmartVillagerData {
             return true;
         }
 
+        // 买不起苹果时不打断工作，先去赚钱（避免又饿又穷的死锁）。
+        if (getCoins(villager) < APPLE_PRICE) {
+            return false;
+        }
+
         BlockPos warehouse = getWarehouseCenter(villager);
-        setStatus(villager, "寻找食物", "饥饿值 " + getHunger(villager) + "，去仓库找苹果");
+        setStatus(villager, "购买食物", "饥饿值 " + getHunger(villager) + "，去仓库花 " + APPLE_PRICE + " 金币买苹果");
         setTargetPlace(villager, warehouse, "hunger_find_food");
 
         boolean arrived = moveToTargetPlace(
@@ -456,10 +542,13 @@ public class SmartVillagerData {
             return true;
         }
 
+        // 成功从仓库取到苹果，向小镇支付货款。
+        spendCoins(villager, APPLE_PRICE);
+
         if (consumeOne(villager.getInventory(), "minecraft:apple")) {
             reduceHunger(villager, HUNGER_EAT_RECOVER);
-            setStatus(villager, "吃东西", "从仓库拿到苹果并吃掉，饥饿值下降到 " + getHunger(villager));
-            addDiary(villager, "我从仓库拿到一个苹果并吃掉了。");
+            setStatus(villager, "吃东西", "花 " + APPLE_PRICE + " 金币买到苹果并吃掉，饥饿值下降到 " + getHunger(villager));
+            addDiary(villager, "我花了 " + APPLE_PRICE + " 金币从仓库买了一个苹果吃掉了。");
         }
 
         return true;
@@ -777,7 +866,7 @@ public class SmartVillagerData {
             case "minecraft:light_blue_wool" -> "淡蓝色羊毛";
             case "minecraft:yellow_wool" -> "黄色羊毛";
             case "minecraft:lime_wool" -> "黄绿色羊毛";
-            case "minecraft:pink_wool" -> "粉色羊毛";
+            case "minecraft:pink_wool" -> "粉������羊毛";
             case "minecraft:gray_wool" -> "灰色羊毛";
             case "minecraft:light_gray_wool" -> "淡灰色羊毛";
             case "minecraft:cyan_wool" -> "青色羊毛";
@@ -837,15 +926,238 @@ public class SmartVillagerData {
     }
 
     public static String getHomeText(Villager villager) {
+        if (hasOwnedHome(villager)) {
+            return getOwnedHomeText(villager);
+        }
+
         BlockPos warehouse = getWarehouseCenter(villager);
         BlockPos town = getTownCenter(villager);
 
-        // 当前新架构里，小镇中心就是仓库中心。
+        // 当前新架构里，小��中心就是仓库中心。
         // 旧代码里 InventoryInteractHandler 还叫“工作点/大本营”，这里直接返回仓库中心，保持兼容。
         return "小镇中心 "
                 + town.getX() + ", " + town.getY() + ", " + town.getZ()
                 + " / 仓库 "
                 + warehouse.getX() + ", " + warehouse.getY() + ", " + warehouse.getZ();
+    }
+
+    public static boolean hasOwnedHome(Villager villager) {
+        return villager.getPersistentData().contains(KEY_HOME_HOUSE_ID)
+                && villager.getPersistentData().contains(KEY_HOME_BED_X);
+    }
+
+    public static void setOwnedHome(Villager villager, String houseId, BlockPos bedPos) {
+        villager.getPersistentData().putString(KEY_HOME_HOUSE_ID, houseId);
+        villager.getPersistentData().putInt(KEY_HOME_BED_X, bedPos.getX());
+        villager.getPersistentData().putInt(KEY_HOME_BED_Y, bedPos.getY());
+        villager.getPersistentData().putInt(KEY_HOME_BED_Z, bedPos.getZ());
+        setMemoryHome(villager, bedPos);
+    }
+
+    public static BlockPos getOwnedBedPos(Villager villager) {
+        return new BlockPos(
+                villager.getPersistentData().getInt(KEY_HOME_BED_X).orElse(villager.getBlockX()),
+                villager.getPersistentData().getInt(KEY_HOME_BED_Y).orElse(villager.getBlockY()),
+                villager.getPersistentData().getInt(KEY_HOME_BED_Z).orElse(villager.getBlockZ())
+        );
+    }
+
+    public static String getOwnedHomeText(Villager villager) {
+        if (!hasOwnedHome(villager)) {
+            return "未拥有住所";
+        }
+
+        BlockPos bed = getOwnedBedPos(villager);
+        String houseId = villager.getPersistentData().getString(KEY_HOME_HOUSE_ID).orElse("未知房屋");
+
+        return houseId + " / 床位 " + bed.getX() + ", " + bed.getY() + ", " + bed.getZ();
+    }
+
+    public static void markTalkedNow(Villager villager) {
+        villager.getPersistentData().putInt(KEY_LAST_TALK_TICK, villager.tickCount);
+    }
+
+    public static int getRelation(Villager villager, Villager other) {
+        return villager.getPersistentData().getInt("Relation_" + other.getUUID()).orElse(0);
+    }
+
+    public static void addRelation(Villager villager, Villager other, int amount) {
+        String key = "Relation_" + other.getUUID();
+        villager.getPersistentData().putInt(key, getRelation(villager, other) + amount);
+    }
+
+    public static boolean isTalking(Villager villager) {
+        return villager.getPersistentData().getBoolean(KEY_IS_TALKING).orElse(false);
+    }
+
+    public static void startTalking(Villager villager, Villager other, int endTick, String topic) {
+        villager.getPersistentData().putBoolean(KEY_IS_TALKING, true);
+        villager.getPersistentData().putString(KEY_TALKING_WITH_UUID, other.getUUID().toString());
+        villager.getPersistentData().putInt(KEY_TALK_END_TICK, endTick);
+        villager.getPersistentData().putString(KEY_TALK_TOPIC, topic == null ? "" : topic);
+        clearTalkTarget(villager);
+    }
+
+    public static void clearTalking(Villager villager) {
+        villager.getPersistentData().putBoolean(KEY_IS_TALKING, false);
+        villager.getPersistentData().remove(KEY_TALKING_WITH_UUID);
+        villager.getPersistentData().remove(KEY_TALK_END_TICK);
+        villager.getPersistentData().remove(KEY_TALK_TOPIC);
+    }
+
+    public static void showTalkBubble(ServerLevel level, Villager villager, String text) {
+        clearTalkBubble(level, villager);
+
+        String bubbleText = wrapBubbleText(text == null ? "" : text, 12);
+
+        if (bubbleText.isBlank()) {
+            return;
+        }
+
+        ArmorStand bubble = new ArmorStand(EntityType.ARMOR_STAND, level);
+        bubble.setPos(villager.getX(), villager.getY() + 2.35D, villager.getZ());
+        bubble.setYRot(0.0F);
+        bubble.setXRot(0.0F);
+        bubble.setInvisible(true);
+        bubble.setNoGravity(true);
+        bubble.setInvulnerable(true);
+        bubble.setSilent(true);
+        bubble.setCustomName(Component.literal("💬 " + bubbleText));
+        bubble.setCustomNameVisible(true);
+
+        level.addFreshEntity(bubble);
+
+        villager.getPersistentData().putString(KEY_TALK_BUBBLE_UUID, bubble.getUUID().toString());
+        villager.getPersistentData().putString(KEY_TALK_BUBBLE_TEXT, bubbleText);
+    }
+
+    public static void updateTalkBubble(ServerLevel level, Villager villager) {
+        UUID bubbleUuid = getTalkBubbleUuid(villager);
+
+        if (bubbleUuid == null) {
+            return;
+        }
+
+        Entity entity = level.getEntity(bubbleUuid);
+
+        if (!(entity instanceof ArmorStand bubble) || !bubble.isAlive()) {
+            villager.getPersistentData().remove(KEY_TALK_BUBBLE_UUID);
+            villager.getPersistentData().remove(KEY_TALK_BUBBLE_TEXT);
+            return;
+        }
+
+        bubble.setPos(villager.getX(), villager.getY() + 2.35D, villager.getZ());
+        bubble.setYRot(villager.getYRot());
+        bubble.setXRot(villager.getXRot());
+
+        String bubbleText = villager.getPersistentData().getString(KEY_TALK_BUBBLE_TEXT).orElse("");
+        if (!bubbleText.isBlank()) {
+            bubble.setCustomName(Component.literal("💬 " + bubbleText));
+            bubble.setCustomNameVisible(true);
+        }
+    }
+
+    public static void clearTalkBubble(ServerLevel level, Villager villager) {
+        UUID bubbleUuid = getTalkBubbleUuid(villager);
+
+        if (bubbleUuid != null) {
+            Entity entity = level.getEntity(bubbleUuid);
+
+            if (entity != null) {
+                entity.discard();
+            }
+        }
+
+        villager.getPersistentData().remove(KEY_TALK_BUBBLE_UUID);
+        villager.getPersistentData().remove(KEY_TALK_BUBBLE_TEXT);
+    }
+
+    private static UUID getTalkBubbleUuid(Villager villager) {
+        String uuidText = villager.getPersistentData().getString(KEY_TALK_BUBBLE_UUID).orElse("");
+
+        if (uuidText.isBlank()) {
+            return null;
+        }
+
+        try {
+            return UUID.fromString(uuidText);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static String wrapBubbleText(String text, int maxCharsPerLine) {
+        String cleaned = text.replace("\r", "").replace("\n", " ").trim();
+
+        if (cleaned.isBlank()) {
+            return "";
+        }
+
+        StringBuilder builder = new StringBuilder();
+        int lineChars = 0;
+
+        for (int i = 0; i < cleaned.length(); i++) {
+            char c = cleaned.charAt(i);
+
+            if (lineChars >= maxCharsPerLine && c != '，' && c != '。' && c != '、') {
+                builder.append("\n");
+                lineChars = 0;
+            }
+
+            builder.append(c);
+            lineChars++;
+
+            if (c == '，' || c == '。' || c == '！' || c == '？') {
+                builder.append("\n");
+                lineChars = 0;
+            }
+        }
+
+        return builder.toString().trim();
+    }
+
+    public static UUID getTalkingWithUuid(Villager villager) {
+        String uuidText = villager.getPersistentData().getString(KEY_TALKING_WITH_UUID).orElse("");
+
+        if (uuidText.isBlank()) {
+            return null;
+        }
+
+        try {
+            return UUID.fromString(uuidText);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    public static int getTalkEndTick(Villager villager) {
+        return villager.getPersistentData().getInt(KEY_TALK_END_TICK).orElse(0);
+    }
+
+    public static String getTalkTopic(Villager villager) {
+        return villager.getPersistentData().getString(KEY_TALK_TOPIC).orElse("");
+    }
+
+    public static void setTalkTarget(Villager villager, Villager target) {
+        villager.getPersistentData().putString(KEY_TALK_TARGET_UUID, target.getUUID().toString());
+    }
+
+    public static UUID getTalkTargetUuid(Villager villager) {
+        String uuidText = villager.getPersistentData().getString(KEY_TALK_TARGET_UUID).orElse("");
+
+        if (uuidText.isBlank()) {
+            return null;
+        }
+
+        try {
+            return UUID.fromString(uuidText);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    public static void clearTalkTarget(Villager villager) {
+        villager.getPersistentData().remove(KEY_TALK_TARGET_UUID);
     }
 
     public static boolean hasItem(SimpleContainer inventory, String itemName) {
@@ -1498,8 +1810,13 @@ public class SmartVillagerData {
         player.sendSystemMessage(Component.literal("§e职业：§f" + roleDisplayName(getRole(villager))));
         player.sendSystemMessage(Component.literal("§e状态：§f" + getStatus(villager)));
         player.sendSystemMessage(Component.literal("§e任务：§f" + getTask(villager)));
+        if (isTalking(villager)) {
+            player.sendSystemMessage(Component.literal("§e交流：§f正在和 " + getTalkingWithUuid(villager) + " 交流，话题：" + getTalkTopic(villager)));
+        }
         player.sendSystemMessage(Component.literal("§e饥饿：§f" + getHunger(villager) + " / " + HUNGER_MAX));
+        player.sendSystemMessage(Component.literal("§e心情：§f" + getMood(villager) + " / " + MOOD_MAX + " §7（低于 " + MOOD_TALK_THRESHOLD + " 就会主动找人聊天）"));
         player.sendSystemMessage(Component.literal("§e金币：§f" + getCoins(villager) + " §7｜累计收入：" + getTotalEarned(villager) + " ｜累计支出：" + getTotalSpent(villager)));
+        player.sendSystemMessage(Component.literal("§e住所：§f" + getOwnedHomeText(villager)));
         player.sendSystemMessage(Component.literal("§e小镇中心：§f" + town.getX() + ", " + town.getY() + ", " + town.getZ()));
         player.sendSystemMessage(Component.literal("§e仓库中心：§f" + warehouse.getX() + ", " + warehouse.getY() + ", " + warehouse.getZ()));
         player.sendSystemMessage(Component.literal("§e当前位置：§f" + villager.getBlockX() + ", " + villager.getBlockY() + ", " + villager.getBlockZ()));
@@ -1517,7 +1834,7 @@ public class SmartVillagerData {
                                 "/aitown_set_work_here " + uuid
                         ))
                         .withHoverEvent(new HoverEvent.ShowText(
-                                Component.literal("点击后，把你当前站的位置记录为 " + getCitizenName(villager) + " 的工作点")
+                                Component.literal("点击后，把你当��站的位置记录为 " + getCitizenName(villager) + " 的工作点")
                         ))
                 );
         player.sendSystemMessage(setWorkHere);

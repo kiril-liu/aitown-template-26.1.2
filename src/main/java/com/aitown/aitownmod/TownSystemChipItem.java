@@ -33,7 +33,7 @@ import net.minecraft.world.level.Level;
  *    展开当前玩家通过小镇系统芯片注册过的智能村民列表。
  *
  * 5. Shift + 右键空气：
- *    查看当前仓库库存和最近仓库存取记录。
+ *    打开小镇状态入口，可继续点击查看仓库流水、房屋信息、交易信息。
  */
 public class TownSystemChipItem extends Item {
     private static final String PLAYER_TOWN_X = "SelectedTownX";
@@ -71,7 +71,7 @@ public class TownSystemChipItem extends Item {
         }
 
         if (player.isShiftKeyDown()) {
-            showWarehouseStatusPanel(serverLevel, player);
+            showTownStatusMenu(serverLevel, player);
         } else {
             showRegisteredTownStatusPanel(serverLevel, player);
         }
@@ -184,6 +184,10 @@ public class TownSystemChipItem extends Item {
                 .append(roleButton(uuid, SmartVillagerData.ROLE_SHEPHERD, "牧羊工"))
         );
 
+        player.sendSystemMessage(Component.empty()
+                .append(roleButton(uuid, SmartVillagerData.ROLE_RESIDENT, "居民"))
+        );
+
         player.sendSystemMessage(Component.literal("§6===================================="));
     }
 
@@ -277,6 +281,7 @@ public class TownSystemChipItem extends Item {
                 "§e- " + name
                         + " §7[" + role + "]"
                         + " §7｜饥饿：§f" + SmartVillagerData.getHunger(villager)
+                        + " §7｜心情：§f" + SmartVillagerData.getMood(villager)
                         + " §a[详情]"
         ).withStyle(style -> style
                 .withClickEvent(new ClickEvent.RunCommand(
@@ -321,9 +326,43 @@ public class TownSystemChipItem extends Item {
     }
 
     /**
-     * Shift + 右键空气：显示仓库库存和最近仓库流水。
+     * Shift + 右键空气：显示小镇状态入口。
      */
-    private static void showWarehouseStatusPanel(
+    private static void showTownStatusMenu(
+            ServerLevel level,
+            Player player
+    ) {
+        if (!hasSelectedTown(player)) {
+            player.sendSystemMessage(Component.literal(
+                    "§c[小镇系统芯片] 还没有设置小镇中心。请先 Shift + 右键点击仓库中心方块。"
+            ));
+            return;
+        }
+
+        player.sendSystemMessage(Component.literal("§6========== 小镇状态 =========="));
+        player.sendSystemMessage(Component.literal("§7点击下面的入口查看小镇系统信息。"));
+        player.sendSystemMessage(Component.empty()
+                .append(menuButton("仓库流水", "/aitown_warehouse", "查看仓库库存和最近存取记录"))
+                .append(Component.literal("  "))
+                .append(menuButton("房屋信息", "/aitown_houses", "查看小镇房屋、价格和床位归属"))
+                .append(Component.literal("  "))
+                .append(menuButton("交易信息", "/aitown_trades", "查看房屋购买等交易记录"))
+        );
+        player.sendSystemMessage(Component.literal("§6=============================="));
+    }
+
+    private static Component menuButton(String label, String command, String hoverText) {
+        return Component.literal("§a[" + label + "]")
+                .withStyle(style -> style
+                        .withClickEvent(new ClickEvent.RunCommand(command))
+                        .withHoverEvent(new HoverEvent.ShowText(Component.literal(hoverText)))
+                );
+    }
+
+    /**
+     * 显示仓库库存和最近仓库流水。
+     */
+    public static void showWarehouseStatusPanel(
             ServerLevel level,
             Player player
     ) {

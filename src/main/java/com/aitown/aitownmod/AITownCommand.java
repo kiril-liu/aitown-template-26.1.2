@@ -60,6 +60,21 @@ public class AITownCommand {
                                                 StringArgumentType.getString(context, "role")
                                         ))))
         );
+
+        event.getDispatcher().register(
+                Commands.literal("aitown_warehouse")
+                        .executes(context -> showWarehousePanel(context.getSource()))
+        );
+
+        event.getDispatcher().register(
+                Commands.literal("aitown_houses")
+                        .executes(context -> showHousePanel(context.getSource()))
+        );
+
+        event.getDispatcher().register(
+                Commands.literal("aitown_trades")
+                        .executes(context -> showTradePanel(context.getSource()))
+        );
     }
 
     private static int setRole(CommandSourceStack source, String uuidText, String role) {
@@ -117,7 +132,8 @@ public class AITownCommand {
                 || SmartVillagerData.ROLE_MINER.equals(role)
                 || SmartVillagerData.ROLE_HANDWORKER.equals(role)
                 || SmartVillagerData.ROLE_FARMER.equals(role)
-                || SmartVillagerData.ROLE_SHEPHERD.equals(role);
+                || SmartVillagerData.ROLE_SHEPHERD.equals(role)
+                || SmartVillagerData.ROLE_RESIDENT.equals(role);
     }
 
     private static boolean hasSelectedTown(Player player) {
@@ -172,6 +188,51 @@ public class AITownCommand {
             source.sendFailure(Component.literal("村民 UUID 无效：" + uuidText));
             return 0;
         }
+    }
+
+    private static int showWarehousePanel(CommandSourceStack source) {
+        if (!(source.getEntity() instanceof Player player)) {
+            source.sendFailure(Component.literal("这个操作只能由玩家点击执行。"));
+            return 0;
+        }
+
+        if (!hasSelectedTown(player)) {
+            source.sendFailure(Component.literal("还没有设置小镇中心。"));
+            return 0;
+        }
+
+        TownSystemChipItem.showWarehouseStatusPanel(source.getLevel(), player);
+        return 1;
+    }
+
+    private static int showHousePanel(CommandSourceStack source) {
+        if (!(source.getEntity() instanceof Player player)) {
+            source.sendFailure(Component.literal("这个操作只能由玩家点击执行。"));
+            return 0;
+        }
+
+        if (!hasSelectedTown(player)) {
+            source.sendFailure(Component.literal("还没有设置小镇中心。"));
+            return 0;
+        }
+
+        TownSystem.showHouseInfo(source.getLevel(), player, getSelectedTown(player));
+        return 1;
+    }
+
+    private static int showTradePanel(CommandSourceStack source) {
+        if (!(source.getEntity() instanceof Player player)) {
+            source.sendFailure(Component.literal("这个操作只能由玩家点击执行。"));
+            return 0;
+        }
+
+        if (!hasSelectedTown(player)) {
+            source.sendFailure(Component.literal("还没有设置小镇中心。"));
+            return 0;
+        }
+
+        TownSystem.showTradeInfo(source.getLevel(), player, getSelectedTown(player));
+        return 1;
     }
 
     private static int showVillagerDetail(CommandSourceStack source, String uuidText) {

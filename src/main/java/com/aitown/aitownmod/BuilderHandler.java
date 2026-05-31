@@ -44,6 +44,12 @@ public class BuilderHandler {
     private static final String KEY_BLUEPRINT = "BlueprintName";
     private static final String KEY_NEEDED_ITEM = "BuilderNeededItem";
 
+    private static final String[] HOUSE_BLUEPRINTS = new String[]{
+            "minecraft:village/plains/houses/plains_small_house_1",
+            "minecraft:village/plains/houses/plains_small_house_2",
+            "minecraft:village/plains/houses/plains_medium_house_1"
+    };
+
     private static final int SITE_SEARCH_RADIUS = 40;
     private static final int SITE_MARGIN = 2;
     private static final int TARGET_OAK_LOGS = 48;
@@ -53,27 +59,13 @@ public class BuilderHandler {
 
     @SubscribeEvent
     public static void onVillagerTick(EntityTickEvent.Pre event) {
-        if (event.getEntity().level().isClientSide()) {
+        net.minecraft.server.level.ServerLevel level =
+                VillagerJobHelper.beginJobTick(event, SmartVillagerData.ROLE_BUILDER);
+        if (level == null) {
             return;
         }
-
-        if (!(event.getEntity() instanceof Villager villager)) {
-            return;
-        }
-
-        if (!SmartVillagerData.isRole(villager, SmartVillagerData.ROLE_BUILDER)) {
-            return;
-        }
-
-        if (!(villager.level() instanceof net.minecraft.server.level.ServerLevel level)) {
-            return;
-        }
-
-        SmartVillagerData.ensureIdentity(villager);
-        SmartVillagerData.suppressVanillaMovement(villager);
-        SmartVillagerData.tickHunger(villager);
-
-        if (SmartVillagerData.tryHandleHunger(level, villager)) {
+        Villager villager = (Villager) event.getEntity();
+        if (TownSystem.tickLifeNeeds(level, villager)) {
             return;
         }
 
@@ -107,21 +99,21 @@ public class BuilderHandler {
     }
 
     private static void tickFindSite(net.minecraft.server.level.ServerLevel level, Villager villager) {
-        SmartVillagerData.setStatus(villager, "寻找空地", "根据蓝图尺寸寻找可建造区域");
+        if (!SmartVillagerData.hasMemoryWork(villager)) {
+            SmartVillagerData.setStatus(villager, "建筑待命", "没有指定建房位置，等待玩家设置工作点");
+            SmartVillagerData.clearTargetPlace(villager);
+            return;
+        }
+
+        ensureBlueprintSelected(villager);
+
+        BlockPos origin = SmartVillagerData.getMemoryWorkOrCurrent(villager);
+        SmartVillagerData.setStatus(villager, "准备施工", "使用玩家指定位置作为建房起点 blueprint=" + villager.getPersistentData().getString(KEY_BLUEPRINT).orElse(""));
 
         List<StructureTemplate.StructureBlockInfo> blocks = loadTemplateBlocks(level, villager);
 
         if (blocks.isEmpty()) {
             SmartVillagerData.setStatus(villager, "无蓝图", "找不到房屋蓝图");
-            return;
-        }
-
-        BuildBounds bounds = calculateBounds(blocks);
-
-        BlockPos origin = findBuildableSite(level, villager, blocks, bounds);
-
-        if (origin == null) {
-            SmartVillagerData.setStatus(villager, "没有空地", "附近没有足够大的空地");
             return;
         }
 
@@ -425,15 +417,31 @@ public class BuilderHandler {
         }
 
         if (finished) {
-            SmartVillagerData.setStatus(villager, "房屋完成", "寻找下一块建造空地");
+            SmartVillagerData.setStatus(villager, "房屋完成", "完成玩家指定位置的房屋建造，回到待命状态");
             SmartVillagerData.addDiary(villager, "我完成了一栋房子的建造。");
+            TownSystem.registerHouseFromBuild(level, villager, origin);
 
             clearPos(villager, KEY_BUILD_X, KEY_BUILD_Y, KEY_BUILD_Z);
             clearPos(villager, KEY_DOOR_X, KEY_DOOR_Y, KEY_DOOR_Z);
+            villager.getPersistentData().remove(SmartVillagerData.KEY_MEMORY_WORK_X);
+            villager.getPersistentData().remove(SmartVillagerData.KEY_MEMORY_WORK_Y);
+            villager.getPersistentData().remove(SmartVillagerData.KEY_MEMORY_WORK_Z);
             SmartVillagerData.clearTargetPlace(villager);
+            villager.getPersistentData().remove(KEY_BLUEPRINT);
 
             setState(villager, STATE_FIND_SITE);
         }
+    }
+
+    private static void ensureBlueprintSelected(Villager villager) {
+        String current = villager.getPersistentData().getString(KEY_BLUEPRINT).orElse("");
+
+        if (!current.isBlank()) {
+            return;
+        }
+
+        String selected = HOUSE_BLUEPRINTS[villager.getRandom().nextInt(HOUSE_BLUEPRINTS.length)];
+        villager.getPersistentData().putString(KEY_BLUEPRINT, selected);
     }
 
     @SuppressWarnings("unchecked")
@@ -606,8 +614,8 @@ public class BuilderHandler {
         // 床是双格方块，现在保留为白色床。
         // 只处理脚部方块，放置时一次性补上床头，避免消耗两张床。
         if (blockName.contains("bed")) {
-            if (originalState.hasProperty(BlockStateProperties.BED_PART)
-                    && originalState.getValue(BlockStateProperties.BED_PART) == net.minecraft.world.level.block.state.properties.BedPart.HEAD) {
+            if (originalState.hasProperty(BedBlock.PART)
+                    && originalState.getValue(BedBlock.PART) == net.minecraft.world.level.block.state.properties.BedPart.HEAD) {
                 return null;
             }
 
@@ -760,9 +768,9 @@ public class BuilderHandler {
             to = to.setValue(BlockStateProperties.OPEN, from.getValue(BlockStateProperties.OPEN));
         }
 
-        if (from.hasProperty(BlockStateProperties.BED_PART)
-                && to.hasProperty(BlockStateProperties.BED_PART)) {
-            to = to.setValue(BlockStateProperties.BED_PART, from.getValue(BlockStateProperties.BED_PART));
+        if (from.hasProperty(BedBlock.PART)
+                && to.hasProperty(BedBlock.PART)) {
+            to = to.setValue(BedBlock.PART, from.getValue(BedBlock.PART));
         }
 
         return to;
@@ -805,14 +813,14 @@ public class BuilderHandler {
         BlockPos headPos = footPos.relative(facing);
         BlockState foot = footState;
 
-        if (foot.hasProperty(BlockStateProperties.BED_PART)) {
-            foot = foot.setValue(BlockStateProperties.BED_PART, net.minecraft.world.level.block.state.properties.BedPart.FOOT);
+        if (foot.hasProperty(BedBlock.PART)) {
+            foot = foot.setValue(BedBlock.PART, net.minecraft.world.level.block.state.properties.BedPart.FOOT);
         }
 
         BlockState head = foot;
 
-        if (head.hasProperty(BlockStateProperties.BED_PART)) {
-            head = head.setValue(BlockStateProperties.BED_PART, net.minecraft.world.level.block.state.properties.BedPart.HEAD);
+        if (head.hasProperty(BedBlock.PART)) {
+            head = head.setValue(BedBlock.PART, net.minecraft.world.level.block.state.properties.BedPart.HEAD);
         }
 
         boolean placedFoot = level.setBlockAndUpdate(footPos, foot);
@@ -1005,30 +1013,21 @@ public class BuilderHandler {
         return String.valueOf(Math.round(value * 10.0D) / 10.0D);
     }
 
+    // 状态/坐标样板统一委托给 VillagerJobHelper。
     private static String getState(Villager villager) {
-        return villager.getPersistentData().getString(KEY_STATE).orElse(STATE_FIND_SITE);
+        return VillagerJobHelper.getState(villager, KEY_STATE, STATE_FIND_SITE);
     }
 
     private static void setState(Villager villager, String state) {
-        villager.getPersistentData().putString(KEY_STATE, state);
+        VillagerJobHelper.setState(villager, KEY_STATE, state);
     }
 
     private static void savePos(Villager villager, String keyX, String keyY, String keyZ, BlockPos pos) {
-        villager.getPersistentData().putInt(keyX, pos.getX());
-        villager.getPersistentData().putInt(keyY, pos.getY());
-        villager.getPersistentData().putInt(keyZ, pos.getZ());
+        VillagerJobHelper.savePos(villager, keyX, keyY, keyZ, pos);
     }
 
     private static BlockPos readPos(Villager villager, String keyX, String keyY, String keyZ) {
-        if (!villager.getPersistentData().contains(keyX)) {
-            return null;
-        }
-
-        return new BlockPos(
-                villager.getPersistentData().getInt(keyX).orElse(0),
-                villager.getPersistentData().getInt(keyY).orElse(0),
-                villager.getPersistentData().getInt(keyZ).orElse(0)
-        );
+        return VillagerJobHelper.readPos(villager, keyX, keyY, keyZ);
     }
 
     private static void clearPos(Villager villager, String keyX, String keyY, String keyZ) {
